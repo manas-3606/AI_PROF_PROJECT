@@ -1,0 +1,21 @@
+{
+  "name": "@health/workflow-worker",
+  "version": "1.0.0",
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@health/db": "workspace:*",
+    "@health/workflows": "workspace:*",
+    "@health/observability": "workspace:*",
+    "bullmq": "^5.41.6"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.4",
+    "tsx": "^4.19.3",
+    "typescript": "^5.7.3"
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "name": "@health/api-server",
+  "version": "1.0.0",
+  "main": "./dist/server.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/server.ts",
+    "start": "node dist/server.js"
+  },
+  "dependencies": {
+    "@fastify/cors": "^10.0.2",
+    "@health/shared-types": "workspace:*",
+    "@health/db": "workspace:*",
+    "@health/scheduling": "workspace:*",
+    "@health/integration": "workspace:*",
+    "@health/verification": "workspace:*",
+    "@health/workflows": "workspace:*",
+    "@health/observability": "workspace:*",
+    "@health/capabilities": "workspace:*",
+    "@health/core-services": "workspace:*",
+    "bcrypt": "^5.1.1",
+    "fastify": "^5.2.1",
+    "jose": "^6.0.8",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/bcrypt": "^5.0.2",
+    "@types/node": "^22.13.4",
+    "tsx": "^4.19.3",
+    "typescript": "^5.7.3"
+  }
+}

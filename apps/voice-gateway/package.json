@@ -1,0 +1,27 @@
+{
+  "name": "@health/voice-gateway",
+  "version": "1.0.0",
+  "main": "./dist/server.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/server.ts",
+    "start": "node dist/server.js"
+  },
+  "dependencies": {
+    "@fastify/cors": "^10.0.2",
+    "@fastify/websocket": "^11.0.2",
+    "@google/genai": "^2.22.0",
+    "@health/shared-types": "workspace:*",
+    "@health/capabilities": "workspace:*",
+    "@health/db": "workspace:*",
+    "@health/observability": "workspace:*",
+    "fastify": "^5.2.1",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.4",
+    "@types/ws": "^8.5.14",
+    "tsx": "^4.19.3",
+    "typescript": "^5.7.3"
+  }
+}

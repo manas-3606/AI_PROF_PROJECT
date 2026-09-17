@@ -1,0 +1,21 @@
+{
+  "name": "@health/core-services",
+  "version": "1.0.0",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc -w"
+  },
+  "dependencies": {
+    "@health/db": "workspace:*",
+    "@health/observability": "workspace:*",
+    "@health/shared-types": "workspace:*",
+    "bcrypt": "^5.1.1",
+    "jose": "^5.9.6"
+  },
+  "devDependencies": {
+    "@types/bcrypt": "^5.0.2",
+    "typescript": "^5.7.3"
+  }
+}

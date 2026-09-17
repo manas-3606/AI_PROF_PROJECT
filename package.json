@@ -1,0 +1,21 @@
+{
+  "name": "ai-prof-platform",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev --parallel",
+    "test": "tsx --test --test-concurrency=1 tests/**/*.test.ts",
+    "lint": "turbo run lint",
+    "db:generate": "pnpm --filter @health/db run generate",
+    "db:push": "pnpm --filter @health/db run push",
+    "db:seed": "pnpm --filter @health/db run seed"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.4",
+    "tsx": "^4.23.13",
+    "turbo": "^2.4.4",
+    "typescript": "^5.7.3"
+  },
+  "packageManager": "pnpm@12.4.2"
+}

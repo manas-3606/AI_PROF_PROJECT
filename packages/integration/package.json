@@ -1,0 +1,18 @@
+{
+  "name": "@health/integration",
+  "version": "1.0.0",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc -w"
+  },
+  "dependencies": {
+    "@health/shared-types": "workspace:*",
+    "@health/db": "workspace:*",
+    "@health/observability": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3"
+  }
+}

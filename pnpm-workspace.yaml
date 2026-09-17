@@ -1,0 +1,14 @@
+packages:
+  - 'apps/*'
+  - 'services/*'
+  - 'packages/*'
+
+allowBuilds:
+  '@google/genai': true
+  '@prisma/client': true
+  '@prisma/engines': true
+  'bcrypt': true
+  'esbuild': true
+  'msgpackr-extract': true
+  'prisma': true
+  'protobufjs': true
