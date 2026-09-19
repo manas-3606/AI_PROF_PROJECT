@@ -1,7 +1,11 @@
 import Fastify, { FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
+import fastifyStatic from '@fastify/static';
+import path from 'node:path';
+
 import { runWithContext } from '@health/observability';
 import { AuthService } from '@health/core-services';
+
 import { authRoutes } from './routes/auth.routes.js';
 import { hospitalRoutes } from './routes/hospitals.routes.js';
 import { doctorRoutes } from './routes/doctors.routes.js';
@@ -11,13 +15,31 @@ import { capabilityRoutes } from './routes/capabilities.routes.js';
 import { analyticsRoutes } from './routes/analytics.routes.js';
 import { chaosRoutes } from './routes/chaos.routes.js';
 import { chatRoutes } from './routes/chat.routes.js';
+
 import crypto from 'node:crypto';
 
 export async function buildApp(): Promise<FastifyInstance> {
   const fastify = Fastify({ logger: false });
 
+  // ============================================================
+  // React frontend production build
+  // ============================================================
+
+  const webDistPath = path.resolve(process.cwd(), 'apps/web/dist');
+
+  await fastify.register(fastifyStatic, {
+    root: webDistPath,
+    prefix: '/',
+  });
+
+  // ============================================================
+  // CORS
+  // ============================================================
+
   const allowedOrigins = process.env.FRONTEND_URL
-    ? process.env.FRONTEND_URL.split(',').map((u) => u.trim().replace(/\/$/, ''))
+    ? process.env.FRONTEND_URL
+        .split(',')
+        .map((u) => u.trim().replace(/\/$/, ''))
     : ['http://localhost:5173'];
 
   await fastify.register(cors, {
@@ -26,43 +48,64 @@ export async function buildApp(): Promise<FastifyInstance> {
       if (!origin) return cb(null, true);
 
       const normalizedOrigin = origin.replace(/\/$/, '');
+
       if (
         allowedOrigins.includes(normalizedOrigin) ||
         allowedOrigins.includes('*') ||
-        (process.env.NODE_ENV !== 'production' && normalizedOrigin.includes('localhost'))
+        (process.env.NODE_ENV !== 'production' &&
+          normalizedOrigin.includes('localhost'))
       ) {
         return cb(null, true);
       }
+
       return cb(null, false);
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   });
 
-  // Handle empty JSON bodies gracefully without throwing FST_ERR_CTP_EMPTY_JSON_BODY
-  fastify.addContentTypeParser('application/json', { parseAs: 'string' }, (req, body: string, done) => {
-    try {
-      if (!body || !body.trim()) {
-        done(null, {});
-        return;
-      }
-      const json = JSON.parse(body);
-      done(null, json);
-    } catch (err: any) {
-      err.statusCode = 400;
-      done(err, undefined);
-    }
-  });
+  // ============================================================
+  // JSON body parser
+  // ============================================================
 
-  // Request hook: extract correlation ID & auth token
+  // Handle empty JSON bodies gracefully without throwing
+  // FST_ERR_CTP_EMPTY_JSON_BODY
+  fastify.addContentTypeParser(
+    'application/json',
+    { parseAs: 'string' },
+    (req, body: string, done) => {
+      try {
+        if (!body || !body.trim()) {
+          done(null, {});
+          return;
+        }
+
+        const json = JSON.parse(body);
+        done(null, json);
+      } catch (err: any) {
+        err.statusCode = 400;
+        done(err, undefined);
+      }
+    }
+  );
+
+  // ============================================================
+  // Request hook
+  // ============================================================
+
+  // Extract correlation ID & auth token
   fastify.addHook('onRequest', async (request, reply) => {
     const correlationId =
-      (request.headers['x-correlation-id'] as string) || crypto.randomUUID();
+      (request.headers['x-correlation-id'] as string) ||
+      crypto.randomUUID();
+
     reply.header('x-correlation-id', correlationId);
 
     const authHeader = request.headers.authorization;
+
     if (authHeader && authHeader.startsWith('Bearer ')) {
       const token = authHeader.slice(7);
+
       try {
         const user = await AuthService.verifyToken(token);
         (request as any).user = user;
@@ -72,19 +115,72 @@ export async function buildApp(): Promise<FastifyInstance> {
     }
   });
 
+  // ============================================================
   // Health check
-  fastify.get('/health', async () => ({ status: 'ok', service: 'api-server' }));
+  // ============================================================
 
-  // Register Routes
-  await fastify.register(authRoutes, { prefix: '/api/auth' });
-  await fastify.register(hospitalRoutes, { prefix: '/api/hospitals' });
-  await fastify.register(doctorRoutes, { prefix: '/api/doctors' });
-  await fastify.register(appointmentRoutes, { prefix: '/api/appointments' });
-  await fastify.register(questionnaireRoutes, { prefix: '/api/questionnaires' });
-  await fastify.register(capabilityRoutes, { prefix: '/api/capabilities' });
-  await fastify.register(analyticsRoutes, { prefix: '/api/analytics' });
-  await fastify.register(chaosRoutes, { prefix: '/api/chaos' });
-  await fastify.register(chatRoutes, { prefix: '/api/chat' });
+  fastify.get('/health', async () => ({
+    status: 'ok',
+    service: 'api-server',
+  }));
+
+  // ============================================================
+  // API Routes
+  // ============================================================
+
+  await fastify.register(authRoutes, {
+    prefix: '/api/auth',
+  });
+
+  await fastify.register(hospitalRoutes, {
+    prefix: '/api/hospitals',
+  });
+
+  await fastify.register(doctorRoutes, {
+    prefix: '/api/doctors',
+  });
+
+  await fastify.register(appointmentRoutes, {
+    prefix: '/api/appointments',
+  });
+
+  await fastify.register(questionnaireRoutes, {
+    prefix: '/api/questionnaires',
+  });
+
+  await fastify.register(capabilityRoutes, {
+    prefix: '/api/capabilities',
+  });
+
+  await fastify.register(analyticsRoutes, {
+    prefix: '/api/analytics',
+  });
+
+  await fastify.register(chaosRoutes, {
+    prefix: '/api/chaos',
+  });
+
+  await fastify.register(chatRoutes, {
+    prefix: '/api/chat',
+  });
+
+  // ============================================================
+  // React SPA fallback
+  // ============================================================
+
+  // API/health requests that do not exist should return 404.
+  // All other unknown routes are handled by React's index.html.
+  fastify.setNotFoundHandler((request, reply) => {
+    const url = request.raw.url || '';
+
+    if (url.startsWith('/api/') || url === '/health') {
+      return reply.code(404).send({
+        error: 'Not Found',
+      });
+    }
+
+    return reply.sendFile('index.html');
+  });
 
   return fastify;
 }

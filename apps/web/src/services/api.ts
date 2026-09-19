@@ -1,11 +1,14 @@
-const rawBase = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001/api').replace(/\/$/, '');
-const API_BASE = rawBase.endsWith('/api') ? rawBase : `${rawBase}/api`;
+const API_BASE = '/api';
 
 export class ApiService {
-  private static token: string | null = typeof window !== 'undefined' ? localStorage.getItem('ai_prof_token') : null;
+  private static token: string | null =
+    typeof window !== 'undefined'
+      ? localStorage.getItem('ai_prof_token')
+      : null;
 
   static setToken(token: string | null) {
     this.token = token;
+
     if (typeof window !== 'undefined') {
       if (token) {
         localStorage.setItem('ai_prof_token', token);
@@ -19,11 +22,13 @@ export class ApiService {
     if (!this.token && typeof window !== 'undefined') {
       this.token = localStorage.getItem('ai_prof_token');
     }
+
     return this.token;
   }
 
   private static getHeaders(): HeadersInit {
     const token = this.getToken();
+
     return {
       'Content-Type': 'application/json',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -36,20 +41,26 @@ export class ApiService {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password }),
     });
+
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.error || 'Invalid email or password');
     }
+
     const data = await res.json();
+
     this.setToken(data.token);
+
     if (data.user && typeof window !== 'undefined') {
       localStorage.setItem('ai_prof_user', JSON.stringify(data.user));
     }
+
     return data;
   }
 
   static logout() {
     this.setToken(null);
+
     if (typeof window !== 'undefined') {
       localStorage.removeItem('ai_prof_user');
     }
@@ -58,7 +69,9 @@ export class ApiService {
   static getCurrentUser(): any {
     try {
       if (typeof window === 'undefined') return null;
+
       const raw = localStorage.getItem('ai_prof_user');
+
       return raw ? JSON.parse(raw) : null;
     } catch {
       return null;
@@ -67,7 +80,11 @@ export class ApiService {
 
   static async getHospitals(status?: string) {
     const query = status ? `?status=${status}` : '';
-    const res = await fetch(`${API_BASE}/hospitals${query}`, { headers: this.getHeaders() });
+
+    const res = await fetch(`${API_BASE}/hospitals${query}`, {
+      headers: this.getHeaders(),
+    });
+
     return await res.json();
   }
 
@@ -77,30 +94,48 @@ export class ApiService {
       headers: this.getHeaders(),
       body: JSON.stringify({ status }),
     });
+
     return await res.json();
   }
 
   static async getDoctors(hospitalId?: string, specialty?: string) {
     const params = new URLSearchParams();
+
     if (hospitalId) params.append('hospitalId', hospitalId);
     if (specialty) params.append('specialty', specialty);
-    const res = await fetch(`${API_BASE}/doctors?${params}`, { headers: this.getHeaders() });
+
+    const res = await fetch(`${API_BASE}/doctors?${params}`, {
+      headers: this.getHeaders(),
+    });
+
     return await res.json();
   }
 
   static async getDoctorSlots(doctorId: string) {
-    const res = await fetch(`${API_BASE}/doctors/${doctorId}/slots`, { headers: this.getHeaders() });
+    const res = await fetch(`${API_BASE}/doctors/${doctorId}/slots`, {
+      headers: this.getHeaders(),
+    });
+
     const data = await res.json();
+
     return data.slots || [];
   }
 
-  static async getAppointments(params: { patientId?: string; doctorId?: string; hospitalId?: string }) {
+  static async getAppointments(params: {
+    patientId?: string;
+    doctorId?: string;
+    hospitalId?: string;
+  }) {
     const search = new URLSearchParams();
+
     if (params.patientId) search.append('patientId', params.patientId);
     if (params.doctorId) search.append('doctorId', params.doctorId);
     if (params.hospitalId) search.append('hospitalId', params.hospitalId);
 
-    const res = await fetch(`${API_BASE}/appointments?${search}`, { headers: this.getHeaders() });
+    const res = await fetch(`${API_BASE}/appointments?${search}`, {
+      headers: this.getHeaders(),
+    });
+
     return await res.json();
   }
 
@@ -110,42 +145,69 @@ export class ApiService {
       headers: this.getHeaders(),
       body: JSON.stringify(payload),
     });
+
     if (!res.ok) {
       const err = await res.json();
       throw new Error(err.error || 'Failed to create appointment');
     }
+
     return await res.json();
   }
 
-  static async rescheduleAppointment(appointmentId: string, newSlotId: string) {
-    const res = await fetch(`${API_BASE}/appointments/${appointmentId}/reschedule`, {
-      method: 'POST',
-      headers: this.getHeaders(),
-      body: JSON.stringify({ newSlotId }),
-    });
+  static async rescheduleAppointment(
+    appointmentId: string,
+    newSlotId: string
+  ) {
+    const res = await fetch(
+      `${API_BASE}/appointments/${appointmentId}/reschedule`,
+      {
+        method: 'POST',
+        headers: this.getHeaders(),
+        body: JSON.stringify({ newSlotId }),
+      }
+    );
+
     return await res.json();
   }
 
-  static async cancelAppointment(appointmentId: string, reason?: string) {
-    const res = await fetch(`${API_BASE}/appointments/${appointmentId}/cancel`, {
-      method: 'POST',
-      headers: this.getHeaders(),
-      body: JSON.stringify({ reason }),
-    });
+  static async cancelAppointment(
+    appointmentId: string,
+    reason?: string
+  ) {
+    const res = await fetch(
+      `${API_BASE}/appointments/${appointmentId}/cancel`,
+      {
+        method: 'POST',
+        headers: this.getHeaders(),
+        body: JSON.stringify({ reason }),
+      }
+    );
+
     return await res.json();
   }
 
   static async synchronizeAppointment(appointmentId: string) {
-    const res = await fetch(`${API_BASE}/appointments/${appointmentId}/synchronize`, {
-      method: 'POST',
-      headers: this.getHeaders(),
-    });
+    const res = await fetch(
+      `${API_BASE}/appointments/${appointmentId}/synchronize`,
+      {
+        method: 'POST',
+        headers: this.getHeaders(),
+      }
+    );
+
     return await res.json();
   }
 
   static async getQuestionnaires(hospitalId?: string) {
     const query = hospitalId ? `?hospitalId=${hospitalId}` : '';
-    const res = await fetch(`${API_BASE}/questionnaires${query}`, { headers: this.getHeaders() });
+
+    const res = await fetch(
+      `${API_BASE}/questionnaires${query}`,
+      {
+        headers: this.getHeaders(),
+      }
+    );
+
     return await res.json();
   }
 
@@ -155,89 +217,187 @@ export class ApiService {
     patientId: string;
     responses: Record<string, any>;
   }) {
-    const res = await fetch(`${API_BASE}/questionnaires/submit`, {
-      method: 'POST',
-      headers: this.getHeaders(),
-      body: JSON.stringify(payload),
-    });
+    const res = await fetch(
+      `${API_BASE}/questionnaires/submit`,
+      {
+        method: 'POST',
+        headers: this.getHeaders(),
+        body: JSON.stringify(payload),
+      }
+    );
+
     return await res.json();
   }
 
-  static async executeCapability(name: string, input: any, conversationId?: string) {
-    const res = await fetch(`${API_BASE}/capabilities/execute`, {
-      method: 'POST',
-      headers: this.getHeaders(),
-      body: JSON.stringify({ name, input, conversationId }),
-    });
+  static async executeCapability(
+    name: string,
+    input: any,
+    conversationId?: string
+  ) {
+    const res = await fetch(
+      `${API_BASE}/capabilities/execute`,
+      {
+        method: 'POST',
+        headers: this.getHeaders(),
+        body: JSON.stringify({
+          name,
+          input,
+          conversationId,
+        }),
+      }
+    );
+
     return await res.json();
   }
 
   static async getMetrics() {
-    const res = await fetch(`${API_BASE}/analytics/metrics`, { headers: this.getHeaders() });
+    const res = await fetch(
+      `${API_BASE}/analytics/metrics`,
+      {
+        headers: this.getHeaders(),
+      }
+    );
+
     return await res.json();
   }
 
-  static async getAuditLogs(limit: number = 50, tenantId?: string) {
-    const search = new URLSearchParams({ limit: String(limit) });
-    if (tenantId) search.append('tenantId', tenantId);
-    const res = await fetch(`${API_BASE}/analytics/audit-logs?${search}`, { headers: this.getHeaders() });
+  static async getAuditLogs(
+    limit: number = 50,
+    tenantId?: string
+  ) {
+    const search = new URLSearchParams({
+      limit: String(limit),
+    });
+
+    if (tenantId) {
+      search.append('tenantId', tenantId);
+    }
+
+    const res = await fetch(
+      `${API_BASE}/analytics/audit-logs?${search}`,
+      {
+        headers: this.getHeaders(),
+      }
+    );
+
     return await res.json();
   }
 
   static async getChaosStatus() {
-    const res = await fetch(`${API_BASE}/chaos/status`, { headers: this.getHeaders() });
+    const res = await fetch(
+      `${API_BASE}/chaos/status`,
+      {
+        headers: this.getHeaders(),
+      }
+    );
+
     return await res.json();
   }
 
-  static async configureChaos(body: { simulatedLatencyMs?: number; failureMode?: string }) {
-    const res = await fetch(`${API_BASE}/chaos/configure`, {
-      method: 'POST',
-      headers: this.getHeaders(),
-      body: JSON.stringify(body),
-    });
+  static async configureChaos(body: {
+    simulatedLatencyMs?: number;
+    failureMode?: string;
+  }) {
+    const res = await fetch(
+      `${API_BASE}/chaos/configure`,
+      {
+        method: 'POST',
+        headers: this.getHeaders(),
+        body: JSON.stringify(body),
+      }
+    );
+
     return await res.json();
   }
 
   static async resetChaos() {
-    const res = await fetch(`${API_BASE}/chaos/reset`, {
-      method: 'POST',
-      headers: this.getHeaders(),
-      body: JSON.stringify({}),
-    });
+    const res = await fetch(
+      `${API_BASE}/chaos/reset`,
+      {
+        method: 'POST',
+        headers: this.getHeaders(),
+        body: JSON.stringify({}),
+      }
+    );
+
     return await res.json();
   }
 
   static async getTrace(correlationId: string) {
-    const res = await fetch(`${API_BASE}/analytics/trace/${encodeURIComponent(correlationId)}`, { headers: this.getHeaders() });
+    const res = await fetch(
+      `${API_BASE}/analytics/trace/${encodeURIComponent(correlationId)}`,
+      {
+        headers: this.getHeaders(),
+      }
+    );
+
     return await res.json();
   }
 
   static async getSection19Metrics() {
-    const res = await fetch(`${API_BASE}/analytics/section-19-metrics`, { headers: this.getHeaders() });
+    const res = await fetch(
+      `${API_BASE}/analytics/section-19-metrics`,
+      {
+        headers: this.getHeaders(),
+      }
+    );
+
     return await res.json();
   }
 
   static async getPlatformAdminDashboard() {
-    const res = await fetch(`${API_BASE}/analytics/dashboard/platform-admin`, { headers: this.getHeaders() });
+    const res = await fetch(
+      `${API_BASE}/analytics/dashboard/platform-admin`,
+      {
+        headers: this.getHeaders(),
+      }
+    );
+
     return await res.json();
   }
 
   static async getHospitalAdminDashboard(hospitalId?: string) {
-    const query = hospitalId ? `?hospitalId=${encodeURIComponent(hospitalId)}` : '';
-    const res = await fetch(`${API_BASE}/analytics/dashboard/hospital-admin${query}`, { headers: this.getHeaders() });
+    const query = hospitalId
+      ? `?hospitalId=${encodeURIComponent(hospitalId)}`
+      : '';
+
+    const res = await fetch(
+      `${API_BASE}/analytics/dashboard/hospital-admin${query}`,
+      {
+        headers: this.getHeaders(),
+      }
+    );
+
     return await res.json();
   }
 
   static async getDoctorDashboard(doctorId?: string) {
-    const query = doctorId ? `?doctorId=${encodeURIComponent(doctorId)}` : '';
-    const res = await fetch(`${API_BASE}/analytics/dashboard/doctor${query}`, { headers: this.getHeaders() });
+    const query = doctorId
+      ? `?doctorId=${encodeURIComponent(doctorId)}`
+      : '';
+
+    const res = await fetch(
+      `${API_BASE}/analytics/dashboard/doctor${query}`,
+      {
+        headers: this.getHeaders(),
+      }
+    );
+
     return await res.json();
   }
 
   static async getPatientDashboard(patientId?: string) {
-    const query = patientId ? `?patientId=${encodeURIComponent(patientId)}` : '';
-    const res = await fetch(`${API_BASE}/analytics/dashboard/patient${query}`, { headers: this.getHeaders() });
+    const query = patientId
+      ? `?patientId=${encodeURIComponent(patientId)}`
+      : '';
+
+    const res = await fetch(
+      `${API_BASE}/analytics/dashboard/patient${query}`,
+      {
+        headers: this.getHeaders(),
+      }
+    );
+
     return await res.json();
   }
 }
-
