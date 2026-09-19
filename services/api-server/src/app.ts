@@ -2,8 +2,9 @@ import Fastify, { FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';
 import path from 'node:path';
+import fs from 'node:fs';
+import crypto from 'node:crypto';
 
-import { runWithContext } from '@health/observability';
 import { AuthService } from '@health/core-services';
 
 import { authRoutes } from './routes/auth.routes.js';
@@ -16,25 +17,41 @@ import { analyticsRoutes } from './routes/analytics.routes.js';
 import { chaosRoutes } from './routes/chaos.routes.js';
 import { chatRoutes } from './routes/chat.routes.js';
 
-import crypto from 'node:crypto';
-
 export async function buildApp(): Promise<FastifyInstance> {
   const fastify = Fastify({ logger: false });
 
-  // ============================================================
-  // React frontend production build
-  // ============================================================
+  /*
+   * Render runs the API package from:
+   * services/api-server
+   *
+   * Therefore we resolve the frontend relative to this compiled file.
+   *
+   * Compiled file:
+   * services/api-server/dist/app.js
+   *
+   * Frontend:
+   * apps/web/dist
+   */
+  const webDistPath = path.resolve(
+    __dirname,
+    '../../../apps/web/dist'
+  );
 
-  const webDistPath = path.resolve(process.cwd(), 'apps/web/dist');
+  console.log('🌐 Frontend dist path:', webDistPath);
+  console.log(
+    '🌐 Frontend dist exists:',
+    fs.existsSync(webDistPath)
+  );
+  console.log(
+    '🌐 Frontend index exists:',
+    fs.existsSync(path.join(webDistPath, 'index.html'))
+  );
 
   await fastify.register(fastifyStatic, {
     root: webDistPath,
     prefix: '/',
+    index: 'index.html',
   });
-
-  // ============================================================
-  // CORS
-  // ============================================================
 
   const allowedOrigins = process.env.FRONTEND_URL
     ? process.env.FRONTEND_URL
@@ -44,8 +61,9 @@ export async function buildApp(): Promise<FastifyInstance> {
 
   await fastify.register(cors, {
     origin: (origin, cb) => {
-      // Allow non-browser requests (Postman, server-to-server, curl)
-      if (!origin) return cb(null, true);
+      if (!origin) {
+        return cb(null, true);
+      }
 
       const normalizedOrigin = origin.replace(/\/$/, '');
 
@@ -64,12 +82,6 @@ export async function buildApp(): Promise<FastifyInstance> {
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   });
 
-  // ============================================================
-  // JSON body parser
-  // ============================================================
-
-  // Handle empty JSON bodies gracefully without throwing
-  // FST_ERR_CTP_EMPTY_JSON_BODY
   fastify.addContentTypeParser(
     'application/json',
     { parseAs: 'string' },
@@ -89,11 +101,6 @@ export async function buildApp(): Promise<FastifyInstance> {
     }
   );
 
-  // ============================================================
-  // Request hook
-  // ============================================================
-
-  // Extract correlation ID & auth token
   fastify.addHook('onRequest', async (request, reply) => {
     const correlationId =
       (request.headers['x-correlation-id'] as string) ||
@@ -115,18 +122,10 @@ export async function buildApp(): Promise<FastifyInstance> {
     }
   });
 
-  // ============================================================
-  // Health check
-  // ============================================================
-
   fastify.get('/health', async () => ({
     status: 'ok',
     service: 'api-server',
   }));
-
-  // ============================================================
-  // API Routes
-  // ============================================================
 
   await fastify.register(authRoutes, {
     prefix: '/api/auth',
@@ -164,18 +163,28 @@ export async function buildApp(): Promise<FastifyInstance> {
     prefix: '/api/chat',
   });
 
-  // ============================================================
-  // React SPA fallback
-  // ============================================================
-
-  // API/health requests that do not exist should return 404.
-  // All other unknown routes are handled by React's index.html.
+  /*
+   * SPA fallback.
+   *
+   * API routes should return JSON 404s.
+   * Everything else should load React's index.html.
+   */
   fastify.setNotFoundHandler((request, reply) => {
     const url = request.raw.url || '';
 
     if (url.startsWith('/api/') || url === '/health') {
       return reply.code(404).send({
         error: 'Not Found',
+      });
+    }
+
+    const indexPath = path.join(webDistPath, 'index.html');
+
+    if (!fs.existsSync(indexPath)) {
+      return reply.code(500).send({
+        error: 'Frontend build not found',
+        frontendPath: webDistPath,
+        indexPath,
       });
     }
 
