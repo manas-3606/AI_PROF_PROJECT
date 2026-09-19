@@ -214,7 +214,7 @@ RULES:
 5. If context.currentIntent is "AWAITING_RESCHEDULE_SLOT" or the user is rescheduling and asks for a day/slot (e.g. "Please book the next available slot on Tuesday"), classify as "RESCHEDULE_SLOT_SELECTION" with dayOfWeek="Tuesday", ordinal="next available".
 6. If the user is selecting from offered appointment slots (e.g. "The 10am one", "first option", "second one", "11:00"), classify as "SLOT_SELECTION" and extract timePreference or ordinal.
 7. If the sentence is cut off mid-thought (e.g. "Hello I am having severe."), classify as "INCOMPLETE_CUTOFF".
-8. SYMPTOM REPORTING: If the user reports physical symptoms, illness, or bodily pain (e.g. "I am having severe heart pain", "I have back pain", "neck stiffness", "shoulder hurts", "cough and fever", "knee ache"), classify as "SYMPTOM_REPORT". Extract symptom (e.g. "heart pain") and mapped specialty ("Cardiology" for heart/cardiac/chest pain, "Orthopedics" for joints/bones/spine/neck/back, "General Medicine" for fever/cough/cold/stomach). DO NOT classify as CLINICAL_SAFETY_INQUIRY unless the patient is explicitly asking the AI to diagnose an illness, prescribe medicine, or formulate a treatment regimen.
+8. SYMPTOM REPORTING: If the user reports physical symptoms, illness, or bodily pain (e.g. "I am having severe heart pain", "I have back pain", "neck stiffness", "shoulder hurts", "cough and fever", "knee ache", "severe leg pain", "pain in my leg"), classify as "SYMPTOM_REPORT". Extract symptom (e.g. "heart pain", "leg pain") and mapped specialty ("Cardiology" for heart/cardiac/chest pain, "Orthopedics" for joints/bones/spine/neck/back/leg/knee/hip/arm/limb pain, "General Medicine" for fever/cough/cold/stomach). DO NOT classify as CLINICAL_SAFETY_INQUIRY unless the patient is explicitly asking the AI to diagnose an illness, prescribe medicine, or formulate a treatment regimen.
 9. CLINICAL SAFETY BOUNDARY: If the user explicitly asks the AI to diagnose their illness, prescribe medication, provide prescription dosages, or advise medical treatments (e.g. "Do I have a heart attack?", "what medicine should I take?", "can you prescribe antibiotics?"), classify as "CLINICAL_SAFETY_INQUIRY".
 10. SPECIALTY DISCOVERY: If the user asks for a specific medical specialty (e.g. "I need a cardiologist", "find me an orthopedic doctor", "I want to see a general physician"), classify as "SPECIALTY_DISCOVERY" with the specialty entity.
 11. Return ONLY the JSON object.
@@ -334,13 +334,30 @@ RULES:
     }
 
     const isOrthoSymptom =
-      /\b(neck|stiff neck|back pain|lower back|spine|spinal|shoulder|knee|hip|elbow|wrist|ankle|foot|hand|joint pain|bone pain|bone|joint|joints|orthopedic|orthopedics|orthopedist|musculoskeletal)\b/i.test(
+      /\b(neck|stiff neck|back pain|lower back|spine|spinal|shoulder|knee|hip|elbow|wrist|ankle|foot|feet|hand|hands|leg|legs|thigh|thighs|calf|calves|shin|shins|arm|arms|joint pain|bone pain|bone|joint|joints|orthopedic|orthopedics|orthopedist|musculoskeletal|sprain|fracture)\b/i.test(
         textLower
-      );
+      ) ||
+      ((textLower.includes('pain') ||
+        textLower.includes('ache') ||
+        textLower.includes('aching') ||
+        textLower.includes('hurts') ||
+        textLower.includes('hurting') ||
+        textLower.includes('sore') ||
+        textLower.includes('stiff')) &&
+        /\b(leg|legs|thigh|calf|calves|shin|arm|arms|knee|knees|hip|hips|foot|feet|ankle|ankles|joint|joints|bone|bones|shoulder|shoulders|elbow|elbows|wrist|wrists|hand|hands|back|neck|spine)\b/i.test(
+          textLower
+        ));
     if (isOrthoSymptom) {
+      let symptomName = 'joint or back pain';
+      if (/\b(leg|legs|thigh|calf|shin)\b/i.test(textLower)) symptomName = 'leg pain';
+      else if (/\b(arm|arms)\b/i.test(textLower)) symptomName = 'arm pain';
+      else if (/\b(neck)\b/i.test(textLower)) symptomName = 'neck pain';
+      else if (/\b(knee)\b/i.test(textLower)) symptomName = 'knee pain';
+      else if (/\b(shoulder)\b/i.test(textLower)) symptomName = 'shoulder pain';
+
       return {
         intent: 'SYMPTOM_REPORT',
-        entities: { symptom: 'joint or back pain', specialty: 'Orthopedics' },
+        entities: { symptom: symptomName, specialty: 'Orthopedics' },
         confidence: 'HIGH',
       };
     }

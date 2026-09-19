@@ -184,63 +184,80 @@ export class SchedulingService {
     await HospitalDoctorConfigService.assertDoctorReadyForAppointments(params.doctorId, params.hospitalId);
 
     try {
-      // Execute booking within an ACID transaction with immediate pre-commit revalidation
-      const appointment = await prisma.$transaction(async (tx) => {
-        // Step A: Fetch target slot
-        const slot = await tx.slot.findUnique({
-          where: { id: params.slotId },
-        });
+      // Execute booking within an ACID transaction with slot serialization and immediate pre-commit revalidation
+      const appointment = await ConcurrencyLockManager.withSlotLock(params.slotId, async () => {
+        return await prisma.$transaction(
+          async (tx) => {
+            // Step A: Fetch target slot
+            const slot = await tx.slot.findUnique({
+              where: { id: params.slotId },
+            });
 
-        if (!slot) {
-          throw new SlotNotFoundError(params.slotId);
-        }
+            if (!slot) {
+              throw new SlotNotFoundError(params.slotId);
+            }
 
-        // Step B: Revalidate availability immediately before commit (PRD Section 7 mandatory distinct step)
-        await this.revalidateSlotAvailability(tx, slot, {
-          appointmentType: params.appointmentType,
-          externalConstraintChecker: params.externalConstraintChecker,
-        });
+            // Step B: Revalidate availability immediately before commit (PRD Section 7 mandatory distinct step)
+            await this.revalidateSlotAvailability(tx, slot, {
+              appointmentType: params.appointmentType,
+              externalConstraintChecker: params.externalConstraintChecker,
+            });
 
-        // Step C: Atomically mark slot as booked
-        await tx.slot.update({
-          where: { id: params.slotId },
-          data: { isBooked: true },
-        });
+            // Step C: Atomically mark slot as booked with conditional guard
+            const updateRes = await tx.slot.updateMany({
+              where: {
+                id: params.slotId,
+                isBooked: false,
+                isBlocked: false,
+              },
+              data: { isBooked: true },
+            });
 
-        // Step D: Create appointment in PENDING state
-        const createdAppt = await tx.appointment.create({
-          data: {
-            patientId: params.patientId,
-            doctorId: params.doctorId,
-            hospitalId: params.hospitalId,
-            slotId: slot.id,
-            startTime: slot.startTime,
-            endTime: slot.endTime,
-            status: AppointmentStatus.PENDING,
-            reason: params.reason,
-            idempotencyKey: params.idempotencyKey,
-            correlationId: params.correlationId,
+            if (updateRes.count === 0) {
+              logger.warn({ slotId: params.slotId }, 'Concurrent booking collision detected - slot already booked or blocked');
+              throw new SlotAlreadyBookedError(params.slotId, 'slot is already booked or blocked in database');
+            }
+
+            // Step D: Create appointment in PENDING state
+            const createdAppt = await tx.appointment.create({
+              data: {
+                patientId: params.patientId,
+                doctorId: params.doctorId,
+                hospitalId: params.hospitalId,
+                slotId: slot.id,
+                startTime: slot.startTime,
+                endTime: slot.endTime,
+                status: AppointmentStatus.PENDING,
+                reason: params.reason,
+                idempotencyKey: params.idempotencyKey,
+                correlationId: params.correlationId,
+              },
+              include: {
+                doctor: true,
+                hospital: true,
+                patient: true,
+              },
+            });
+
+            // Step E: Record initial state history
+            await tx.appointmentStateHistory.create({
+              data: {
+                appointmentId: createdAppt.id,
+                hospitalId: createdAppt.hospitalId,
+                fromStatus: AppointmentStatus.REQUESTED,
+                toStatus: AppointmentStatus.PENDING,
+                reason: params.reason || 'Initial slot reservation',
+                correlationId: params.correlationId,
+              },
+            });
+
+            return createdAppt;
           },
-          include: {
-            doctor: true,
-            hospital: true,
-            patient: true,
-          },
-        });
-
-        // Step E: Record initial state history
-        await tx.appointmentStateHistory.create({
-          data: {
-            appointmentId: createdAppt.id,
-            hospitalId: createdAppt.hospitalId,
-            fromStatus: AppointmentStatus.REQUESTED,
-            toStatus: AppointmentStatus.PENDING,
-            reason: params.reason || 'Initial slot reservation',
-            correlationId: params.correlationId,
-          },
-        });
-
-        return createdAppt;
+          {
+            maxWait: 15000,
+            timeout: 30000,
+          }
+        );
       });
 
       metricsCollector.recordBooking(true);

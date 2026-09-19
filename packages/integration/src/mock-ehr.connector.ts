@@ -58,7 +58,9 @@ export class MockEhrConnector implements HealthcareConnector {
         (timeoutErr as any).code = 'TIMEOUT';
         throw timeoutErr;
       }
+
       metricsCollector.recordEhrOperation('FAILED');
+      logger.error({ err: err.message, correlationId }, 'Mock EHR appointment creation failed');
       throw err;
     }
   }

@@ -210,7 +210,7 @@ export class CapabilityRegistry {
     const metadata: CapabilityMetadata = {
       ...rawMetadata,
       actorRole: rawMetadata.actorRole || rawMetadata.userRole,
-      tenantId: rawMetadata.tenantId || rawMetadata.hospitalId,
+      tenantId: rawMetadata.tenantId || (rawMetadata.actorRole === 'HOSPITAL_ADMIN' ? rawMetadata.hospitalId : undefined),
       actorId: rawMetadata.actorId || rawMetadata.userId,
     };
     const startTime = Date.now();
@@ -472,8 +472,13 @@ export class CapabilityRegistry {
             );
           }
 
-          // Tenant Isolation
-          if (metadata.tenantId && appt.hospitalId !== metadata.tenantId && metadata.actorRole !== 'PLATFORM_ADMIN') {
+          // Tenant Isolation: Enforce hospital tenant boundary for all non-patient/non-platform actors
+          if (
+            metadata.tenantId &&
+            appt.hospitalId !== metadata.tenantId &&
+            metadata.actorRole !== 'PATIENT' &&
+            metadata.actorRole !== 'PLATFORM_ADMIN'
+          ) {
             throw new CapabilityUnauthorizedError(
               `Cross-tenant access forbidden: Cannot access appointment from hospital ${appt.hospitalId}`,
               name,
@@ -871,8 +876,13 @@ export class CapabilityRegistry {
             throw new CapabilityNotFoundError(`Appointment ${input.appointmentId} not found`, name, correlationId);
           }
 
-          // Authorization
-          if (metadata.tenantId && appt.hospitalId !== metadata.tenantId && metadata.actorRole !== 'PLATFORM_ADMIN') {
+          // Authorization: Tenant Isolation
+          if (
+            metadata.tenantId &&
+            appt.hospitalId !== metadata.tenantId &&
+            metadata.actorRole !== 'PATIENT' &&
+            metadata.actorRole !== 'PLATFORM_ADMIN'
+          ) {
             throw new CapabilityUnauthorizedError(
               `Cross-tenant access forbidden: Cannot reschedule appointment from hospital ${appt.hospitalId}`,
               name,
@@ -1044,8 +1054,13 @@ export class CapabilityRegistry {
             throw new CapabilityNotFoundError(`Appointment ${input.appointmentId} not found`, name, correlationId);
           }
 
-          // Authorization
-          if (metadata.tenantId && appt.hospitalId !== metadata.tenantId && metadata.actorRole !== 'PLATFORM_ADMIN') {
+          // Authorization: Tenant Isolation
+          if (
+            metadata.tenantId &&
+            appt.hospitalId !== metadata.tenantId &&
+            metadata.actorRole !== 'PATIENT' &&
+            metadata.actorRole !== 'PLATFORM_ADMIN'
+          ) {
             throw new CapabilityUnauthorizedError(
               `Cross-tenant access forbidden: Cannot cancel appointment belonging to hospital ${appt.hospitalId}`,
               name,
@@ -1718,7 +1733,12 @@ export class CapabilityRegistry {
             throw new CapabilityNotFoundError(`Appointment ${input.appointmentId} not found`, name, correlationId);
           }
 
-          if (metadata.tenantId && appt.hospitalId !== metadata.tenantId && metadata.actorRole !== 'PLATFORM_ADMIN') {
+          if (
+            metadata.tenantId &&
+            appt.hospitalId !== metadata.tenantId &&
+            metadata.actorRole !== 'PATIENT' &&
+            metadata.actorRole !== 'PLATFORM_ADMIN'
+          ) {
             throw new CapabilityUnauthorizedError(
               `Cross-tenant access forbidden: Cannot sync appointment of hospital ${appt.hospitalId}`,
               name,

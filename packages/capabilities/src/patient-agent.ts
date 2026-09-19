@@ -296,7 +296,13 @@ export class PatientAccessAgent {
     }
 
     // Handle factual hospital inquiries (location, address, hours, contact)
-    if (routeDecision.intent === 'FACTUAL_HOSPITAL_INQUIRY') {
+    if (
+      routeDecision.intent === 'FACTUAL_HOSPITAL_INQUIRY' &&
+      !textLower.includes('what hospitals') &&
+      !textLower.includes('available hospitals') &&
+      !textLower.includes('hospitals do you have') &&
+      !textLower.includes('clinics do you have')
+    ) {
       return this.handleFactualHospitalInquiry(routeDecision, context, capabilityMeta);
     }
 
@@ -396,14 +402,30 @@ export class PatientAccessAgent {
     const isOrthoSymptom =
       (routeDecision.intent === 'SYMPTOM_REPORT' && routeDecision.entities.specialty?.toLowerCase() === 'orthopedics') ||
       (routeDecision.intent === 'SPECIALTY_DISCOVERY' && routeDecision.entities.specialty?.toLowerCase() === 'orthopedics') ||
-      /\b(neck|cervical|stiff neck|back|spine|spinal|lower back|lumbar|sciatica|disc|shoulder|knee|hip|elbow|wrist|ankle|foot|feet|hand|bone|bones|joint|joints|orthopedic|orthopedics|orthopedist|musculoskeletal|ligament|tendon|cartilage|sprain|fracture|muscle pain|muscle ache)\b/i.test(textLower) ||
+      (routeDecision.entities?.symptom &&
+        /\b(leg|arm|limb|joint|bone|neck|back|spine|shoulder|knee|hip|orthopedic)\b/i.test(routeDecision.entities.symptom)) ||
+      /\b(neck|cervical|stiff neck|back|spine|spinal|lower back|lumbar|sciatica|disc|shoulder|knee|hip|elbow|wrist|ankle|foot|feet|hand|hands|leg|legs|thigh|thighs|calf|calves|shin|shins|arm|arms|bone|bones|joint|joints|orthopedic|orthopedics|orthopedist|musculoskeletal|ligament|tendon|cartilage|sprain|fracture|muscle pain|muscle ache)\b/i.test(textLower) ||
+      textLower.includes('leg pain') ||
+      textLower.includes('arm pain') ||
+      textLower.includes('calf pain') ||
+      textLower.includes('thigh pain') ||
       textLower.includes('neck pain') ||
       textLower.includes('back pain') ||
       textLower.includes('shoulder pain') ||
       textLower.includes('knee pain') ||
       textLower.includes('hip pain') ||
       textLower.includes('joint pain') ||
-      textLower.includes('bone pain');
+      textLower.includes('bone pain') ||
+      ((textLower.includes('pain') ||
+        textLower.includes('ache') ||
+        textLower.includes('aching') ||
+        textLower.includes('hurts') ||
+        textLower.includes('hurting') ||
+        textLower.includes('sore') ||
+        textLower.includes('stiff')) &&
+        /\b(leg|legs|thigh|calf|calves|shin|arm|arms|knee|knees|hip|hips|foot|feet|ankle|ankles|joint|joints|bone|bones|shoulder|shoulders|elbow|elbows|wrist|wrists|hand|hands|back|neck|spine)\b/i.test(
+          textLower
+        ));
 
     const isGeneralMedSymptom =
       (routeDecision.intent === 'SYMPTOM_REPORT' && routeDecision.entities.specialty?.toLowerCase() === 'general medicine') ||
@@ -642,24 +664,28 @@ export class PatientAccessAgent {
         textLower
       )
     ) {
-      return this.handleAmbiguousBookingRequest(context, capabilityMeta);
+      return await this.handleAmbiguousBookingRequest(context, capabilityMeta);
     }
 
     // 10d. Intent: Unspecified Pain or Symptom (clarifies anatomical location rather than generic greeting)
     if (
-      /\b(severe pain|in pain|hurts|hurting|ache|aching|in agony|unwell|not feeling well|feeling ill|feel bad)\b/i.test(
+      /\b(severe(?:\s+[a-z]+)?\s+pain|in pain|hurts|hurting|ache|aching|in agony|unwell|not feeling well|feeling ill|feel bad|any pain|lot of pain|much pain|having pain)\b/i.test(
         textLower
-      )
+      ) ||
+      (textLower.includes('pain') && !textLower.includes('paint'))
     ) {
       const clarifyResponse =
-        "I'm sorry to hear that you are experiencing pain. To help connect you with the right doctor or specialist, could you please tell me where the pain is located (for example, neck, back, joints, chest, or general illness)?";
+        "I'm sorry to hear that you are experiencing pain. To help connect you with the right doctor or specialist, could you please tell me where the pain is located (for example, leg, back, neck, joints, chest, or general illness)?";
+      const updatedContext = await ConversationContextManager.updateContext(this.conversationId, {
+        currentIntent: 'AMBIGUOUS_BOOKING_REQUEST',
+      });
       return {
         spokenText: clarifyResponse,
         responseText: clarifyResponse,
         intentDetected: 'SYMPTOM_LOCATION_CLARIFICATION',
         clarificationNeeded: true,
         correlationId: capabilityMeta.correlationId!,
-        context,
+        context: updatedContext,
       };
     }
 
@@ -682,7 +708,11 @@ export class PatientAccessAgent {
     }
 
     // Default conversational greeting / clarification prompt
-    // Only return the initial greeting if this is an explicit greeting or no prior context exists
+    // Only return the initial greeting if this is an explicit greeting or empty utterance
+    const isExplicitGreeting =
+      /^(hi|hello|hey|good morning|good afternoon|good evening|greetings)\b/i.test(textLower.trim()) ||
+      textLower.trim() === '';
+
     const hasPriorContext = !!(
       context.selectedDoctorId ||
       context.selectedHospitalId ||
@@ -691,15 +721,17 @@ export class PatientAccessAgent {
       context.currentIntent
     );
 
-    const defaultResponse = hasPriorContext
+    const defaultResponse = !isExplicitGreeting
+      ? "I want to make sure I assist you correctly. Could you please specify if you'd like to book an appointment, check doctor openings, or describe your symptoms?"
+      : hasPriorContext
       ? "I want to make sure I assist you correctly. Could you please specify if you'd like to book an appointment, check doctor openings, or complete pre-visit intake?"
       : 'Hello! I am your AI Patient Access Assistant. I can help you find doctors, check appointment openings, book or reschedule visits, and complete pre-visit intake. How may I help you today?';
 
     return {
       spokenText: defaultResponse,
       responseText: defaultResponse,
-      intentDetected: hasPriorContext ? 'INTENT_CLARIFICATION' : 'GREETING_OR_GENERAL_HELP',
-      clarificationNeeded: hasPriorContext,
+      intentDetected: isExplicitGreeting && !hasPriorContext ? 'GREETING_OR_GENERAL_HELP' : 'INTENT_CLARIFICATION',
+      clarificationNeeded: !isExplicitGreeting || hasPriorContext,
       correlationId: capabilityMeta.correlationId!,
       context,
     };
@@ -712,19 +744,22 @@ export class PatientAccessAgent {
   /**
    * Ambiguous booking request: Asks for clarification rather than guessing.
    */
-  private handleAmbiguousBookingRequest(
+  private async handleAmbiguousBookingRequest(
     context: ActiveContext,
     meta: CapabilityMetadata
-  ): AgentTurnResponse {
+  ): Promise<AgentTurnResponse> {
     const responseText =
       'I would be happy to help you schedule an appointment. Could you please let me know what symptoms you are experiencing, or which doctor or specialty you are looking for?';
+    const updatedContext = await ConversationContextManager.updateContext(this.conversationId, {
+      currentIntent: 'AMBIGUOUS_BOOKING_REQUEST',
+    });
     return {
       spokenText: responseText,
       responseText,
       intentDetected: 'AMBIGUOUS_BOOKING_REQUEST',
       clarificationNeeded: true,
       correlationId: meta.correlationId!,
-      context,
+      context: updatedContext,
     };
   }
 
@@ -1575,6 +1610,8 @@ export class PatientAccessAgent {
 
     let symptomQuote = 'joint or musculoskeletal pain';
     if (utterance.includes('neck')) symptomQuote = 'neck pain';
+    else if (utterance.includes('leg') || utterance.includes('thigh') || utterance.includes('calf') || utterance.includes('shin')) symptomQuote = 'leg pain';
+    else if (utterance.includes('arm')) symptomQuote = 'arm pain';
     else if (utterance.includes('back')) symptomQuote = 'back pain';
     else if (utterance.includes('spine') || utterance.includes('spinal')) symptomQuote = 'spine or back pain';
     else if (utterance.includes('shoulder')) symptomQuote = 'shoulder pain';

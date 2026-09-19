@@ -23,6 +23,28 @@ export class SlotNotFoundError extends Error {
 }
 
 export class ConcurrencyLockManager {
+  private static slotLocks = new Map<string, Promise<void>>();
+
+  /**
+   * Serializes concurrent booking attempts for the same slotId within this process.
+   */
+  static async withSlotLock<T>(slotId: string, fn: () => Promise<T>): Promise<T> {
+    while (ConcurrencyLockManager.slotLocks.has(slotId)) {
+      await ConcurrencyLockManager.slotLocks.get(slotId);
+    }
+    let resolveLock!: () => void;
+    const lockPromise = new Promise<void>((resolve) => {
+      resolveLock = resolve;
+    });
+    ConcurrencyLockManager.slotLocks.set(slotId, lockPromise);
+    try {
+      return await fn();
+    } finally {
+      ConcurrencyLockManager.slotLocks.delete(slotId);
+      resolveLock();
+    }
+  }
+
   /**
    * Atomically locks and reserves a slot within an ACID transaction.
    * If two requests hit simultaneously, only one succeeds and the other receives SlotAlreadyBookedError.
@@ -38,38 +60,52 @@ export class ConcurrencyLockManager {
     startTime: Date;
     endTime: Date;
   }> {
-    return await prisma.$transaction(async (tx) => {
-      const slot = await tx.slot.findUnique({
-        where: { id: slotId },
+    return await ConcurrencyLockManager.withSlotLock(slotId, async () => {
+      return await prisma.$transaction(async (tx) => {
+        const slot = await tx.slot.findUnique({
+          where: { id: slotId },
+        });
+
+        if (!slot) {
+          throw new SlotNotFoundError(slotId);
+        }
+
+        if (slot.isBooked || slot.isBlocked) {
+          logger.warn({ slotId }, 'Concurrent booking collision detected - slot already booked or blocked');
+          throw new SlotAlreadyBookedError(slotId);
+        }
+
+        // Revalidate availability immediately before commit if callback provided
+        if (revalidateFn) {
+          await revalidateFn(tx, slot);
+        }
+
+        // Atomically mark the slot as booked with conditional guard
+        const updateRes = await tx.slot.updateMany({
+          where: {
+            id: slotId,
+            isBooked: false,
+            isBlocked: false,
+          },
+          data: { isBooked: true },
+        });
+
+        if (updateRes.count === 0) {
+          logger.warn({ slotId }, 'Concurrent booking collision detected - slot already booked or blocked');
+          throw new SlotAlreadyBookedError(slotId);
+        }
+
+        return {
+          slotId: slot.id,
+          doctorId: slot.doctorId,
+          hospitalId: slot.hospitalId,
+          startTime: slot.startTime,
+          endTime: slot.endTime,
+        };
+      }, {
+        maxWait: 15000,
+        timeout: 30000,
       });
-
-      if (!slot) {
-        throw new SlotNotFoundError(slotId);
-      }
-
-      if (slot.isBooked || slot.isBlocked) {
-        logger.warn({ slotId }, 'Concurrent booking collision detected - slot already booked or blocked');
-        throw new SlotAlreadyBookedError(slotId);
-      }
-
-      // Revalidate availability immediately before commit if callback provided
-      if (revalidateFn) {
-        await revalidateFn(tx, slot);
-      }
-
-      // Atomically mark the slot as booked
-      const updated = await tx.slot.update({
-        where: { id: slotId },
-        data: { isBooked: true },
-      });
-
-      return {
-        slotId: updated.id,
-        doctorId: updated.doctorId,
-        hospitalId: updated.hospitalId,
-        startTime: updated.startTime,
-        endTime: updated.endTime,
-      };
     });
   }
 
