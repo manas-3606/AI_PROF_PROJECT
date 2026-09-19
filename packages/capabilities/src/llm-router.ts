@@ -374,18 +374,24 @@ RULES:
       };
     }
 
-    // 6. Doctor Availability
+    // 6. Doctor Availability & Direct Doctor Booking ("book an appointment with Dr Arvind Rao at morning Monday")
     if (
-      /\b(what times?|what openings?|when is|available|openings? does|times? does)\b/i.test(textLower) &&
-      /\b(dr\.?|doctor|jenkins|chen|rao|patel)\b/i.test(textLower)
+      (/\b(what times?|what openings?|when is|available|openings? does|times? does|book|schedule|appointment|see|visit)\b/i.test(textLower)) &&
+      (/\b(dr\.?|doctor|jenkins|chen|rao|patel|rostova|arvind)\b/i.test(textLower))
     ) {
       const dayMatch = textLower.match(/\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i);
-      const drMatch = textLower.match(/(?:dr\.?|doctor)\s+([a-z]+)/i) || textLower.match(/\b(jenkins|chen|rao|patel)\b/i);
+      const timePref = textLower.match(/\b(morning|afternoon|evening|earliest|latest)\b/i);
+      const drMatch =
+        textLower.match(/(?:dr\.?|doctor)\s+([a-z\s]+?)(?:\s+at|\s+on|\s+for|\s+this|\s+next|\s+in|\s+morning|\s+afternoon|$)/i) ||
+        textLower.match(/(?:dr\.?|doctor)\s+([a-z]+)/i) ||
+        textLower.match(/\b(jenkins|chen|rao|patel|rostova|arvind)\b/i);
+
       return {
-        intent: 'DOCTOR_AVAILABILITY',
+        intent: 'DOCTOR_BOOKING_CLARIFICATION',
         entities: {
-          doctorName: drMatch ? drMatch[1] : undefined,
+          doctorName: drMatch ? drMatch[1].trim() : undefined,
           dayOfWeek: dayMatch ? dayMatch[1] : undefined,
+          timePreference: timePref ? timePref[1] : undefined,
         },
         confidence: 'HIGH',
       };

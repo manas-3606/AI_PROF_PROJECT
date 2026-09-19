@@ -370,9 +370,9 @@ export class PatientAccessAgent {
       return this.handleQuestionnaireTurn('yes', context, activePatientId!, capabilityMeta);
     }
 
-    // Handle Doctor Availability inquiry via LLM routing
+    // Handle Doctor Availability & Doctor Booking inquiries via LLM routing
     if (
-      routeDecision.intent === 'DOCTOR_AVAILABILITY' &&
+      (routeDecision.intent === 'DOCTOR_AVAILABILITY' || routeDecision.intent === 'DOCTOR_BOOKING_CLARIFICATION') &&
       routeDecision.entities.doctorName
     ) {
       return this.handleDoctorBookingClarification(
@@ -568,9 +568,11 @@ export class PatientAccessAgent {
       'openings', 'opening', 'slots', 'slot'
     ]);
     let doctorNameQuery: string | undefined;
-    const drMention = textLower.match(/(?:dr\.?|doctor)\s+([a-z]+)/i);
-    if (drMention && !stopWords.has(drMention[1].toLowerCase())) {
-      doctorNameQuery = drMention[1];
+    const drMention =
+      textLower.match(/(?:dr\.?|doctor)\s+([a-z\s]+?)(?:\s+at|\s+on|\s+for|\s+this|\s+next|\s+in|\s+morning|\s+afternoon|$)/i) ||
+      textLower.match(/(?:dr\.?|doctor)\s+([a-z]+)/i);
+    if (drMention && !stopWords.has(drMention[1].toLowerCase().trim())) {
+      doctorNameQuery = drMention[1].trim();
     } else {
       const bookMatch = textLower.match(/(?:book|schedule|appointment\s+with|openings\s+(?:for|does|with)|see)\s+([a-z]+)/i);
       if (bookMatch && !stopWords.has(bookMatch[1].toLowerCase())) {
@@ -808,6 +810,57 @@ export class PatientAccessAgent {
       correlationId: meta.correlationId!,
       context,
     };
+  }
+
+  /**
+   * Builds matching regexes for both local time and UTC time representations,
+   * supporting spoken formats ("10 30", "ten thirty", "10:30", "10am").
+   */
+  private buildSlotMatchPatterns(startTime: string | Date): RegExp[] {
+    const d = new Date(startTime);
+    const patterns: RegExp[] = [];
+
+    const numberWords: Record<number, string> = {
+      1: 'one', 2: 'two', 3: 'three', 4: 'four', 5: 'five',
+      6: 'six', 7: 'seven', 8: 'eight', 9: 'nine', 10: 'ten',
+      11: 'eleven', 12: 'twelve'
+    };
+    const minuteWords: Record<number, string> = {
+      0: "o'?clock",
+      15: 'fifteen',
+      30: 'thirty',
+      45: 'forty[ -]?five'
+    };
+
+    const timeVariants = [
+      { hour24: d.getHours(), min: d.getMinutes() },
+      { hour24: d.getUTCHours(), min: d.getUTCMinutes() }
+    ];
+
+    for (const { hour24, min } of timeVariants) {
+      const hour12 = hour24 % 12 || 12;
+      const minStr = min < 10 ? `0${min}` : `${min}`;
+      const hourWord = numberWords[hour12];
+      const minWord = minuteWords[min];
+
+      patterns.push(new RegExp(`\\b${hour12}:${minStr}\\b`, 'i'));
+      patterns.push(new RegExp(`\\b${hour12}\\s+${minStr}\\b`, 'i'));
+      patterns.push(new RegExp(`\\b${hour24}:${minStr}\\b`, 'i'));
+
+      if (min === 0) {
+        patterns.push(new RegExp(`\\b${hour12}\\s*(?:am|pm|o'?clock)\\b`, 'i'));
+        if (hourWord) {
+          patterns.push(new RegExp(`\\b${hourWord}\\s*(?:am|pm|o'?clock)\\b`, 'i'));
+        }
+      } else {
+        patterns.push(new RegExp(`\\b${hour12}\\s*${minStr}\\s*(?:am|pm)?\\b`, 'i'));
+        if (hourWord && minWord) {
+          patterns.push(new RegExp(`\\b${hourWord}\\s+${minWord}\\b`, 'i'));
+        }
+      }
+    }
+
+    return patterns;
   }
 
   /**
@@ -1204,9 +1257,12 @@ export class PatientAccessAgent {
       };
     }
 
-    // Extract any explicit time or day requested by the patient
+    // Extract any explicit time or day requested by the patient (supports "10 30", "ten thirty", "10:30", etc.)
     const timeMatch =
-      textLower.match(/\b(\d{1,2}:\d{2}\s*(?:am|pm)?|\d{1,2}\s*(?:am|pm)|\d{1,2}\s*o'?clock)\b/i) ||
+      textLower.match(/\b(\d{1,2}\s*:\s*\d{2}\s*(?:am|pm)?)\b/i) ||
+      textLower.match(/\b(\d{1,2}\s+\d{2}\s*(?:am|pm)?)\b/i) ||
+      textLower.match(/\b((?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+(?:thirty|fifteen|forty[ -]?five|o'?clock)(?:\s*(?:am|pm))?)\b/i) ||
+      textLower.match(/\b(\d{1,2}\s*(?:am|pm|o'?clock))\b/i) ||
       textLower.match(/\b(?:at|for|the)\s+(\d{1,2})\s*(?:one|am|pm)?\b/i);
     const dayMatch = textLower.match(/\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i);
 
@@ -1258,18 +1314,7 @@ export class PatientAccessAgent {
       // If user also specified a time on that day (e.g. "Tuesday at 10am"):
       if (timeMatch) {
         for (const opt of dayMatches) {
-          const optDate = new Date(opt.startTime);
-          const hourNum = optDate.getHours();
-          const hour12Num = hourNum % 12 || 12;
-          const minNum = optDate.getMinutes();
-          const minStr = minNum < 10 ? `0${minNum}` : `${minNum}`;
-
-          const patterns = [
-            new RegExp(`\\b${hour12Num}:${minStr}\\b`, 'i'),
-            new RegExp(`\\b${hour12Num}\\s*(?:am|pm)\\b`, 'i'),
-            new RegExp(`\\b${hourNum}:${minStr}\\b`, 'i'),
-          ];
-
+          const patterns = this.buildSlotMatchPatterns(opt.startTime);
           if (patterns.some((rgx) => rgx.test(textLower))) {
             matchedSlot = opt;
             break;
@@ -1296,20 +1341,9 @@ export class PatientAccessAgent {
         matchedSlot = dayMatches[0];
       }
     } else if (timeMatch) {
-      // Patient requested a specific time: e.g. "10am", "10:00", "8:00 in the morning", "12pm"
+      // Patient requested a specific time: e.g. "10am", "10:00", "10 30", "ten thirty", "8:00 in the morning", "12pm"
       for (const opt of ambiguousOptions) {
-        const optDate = new Date(opt.startTime);
-        const hourNum = optDate.getHours();
-        const hour12Num = hourNum % 12 || 12;
-        const minNum = optDate.getMinutes();
-        const minStr = minNum < 10 ? `0${minNum}` : `${minNum}`;
-
-        const patterns = [
-          new RegExp(`\\b${hour12Num}:${minStr}\\b`, 'i'),
-          new RegExp(`\\b${hour12Num}\\s*(?:am|pm)\\b`, 'i'),
-          new RegExp(`\\b${hourNum}:${minStr}\\b`, 'i'),
-        ];
-
+        const patterns = this.buildSlotMatchPatterns(opt.startTime);
         if (patterns.some((rgx) => rgx.test(textLower))) {
           matchedSlot = opt;
           break;

@@ -39,7 +39,9 @@ export const VoiceHud: React.FC<VoiceHudProps> = ({ onAppointmentBooked }) => {
   const [fillerText, setFillerText] = useState<string | null>(null);
   const [lastTurnLatency, setLastTurnLatency] = useState<number | null>(null);
   const [conversationId, setConversationId] = useState<string | null>(() => {
-    return localStorage.getItem('active_voice_conversation_id');
+    const user = ApiService.getCurrentUser();
+    const key = user?.patientId ? `active_voice_conversation_id_${user.patientId}` : 'active_voice_conversation_id';
+    return localStorage.getItem(key);
   });
 
   // Audio visualization and feedback states
@@ -439,12 +441,28 @@ export const VoiceHud: React.FC<VoiceHudProps> = ({ onAppointmentBooked }) => {
     utterance.pitch = 1.0;
     activeUtteranceRef.current = utterance;
 
+    // Safety watchdog: Chrome sometimes drops utterance.onend on long speech strings
+    const estimatedDurationMs = Math.max(3500, Math.min(15000, (text.length / 14) * 1000 + 1000));
+    const safetyTimer = setTimeout(() => {
+      if (activeUtteranceRef.current === utterance && voiceStateRef.current === 'speaking') {
+        console.warn('TTS safety watchdog fired: releasing speaking lock');
+        activeUtteranceRef.current = null;
+        if (isContinuousSessionRef.current) {
+          setVoiceState('listening');
+          startListeningRef.current();
+        } else {
+          setVoiceState('idle');
+        }
+      }
+    }, estimatedDurationMs);
+
     utterance.onstart = () => {
       setVoiceState('speaking');
       sendLifecycleEvent('TTS_PLAYBACK_START');
     };
 
     utterance.onend = () => {
+      clearTimeout(safetyTimer);
       activeUtteranceRef.current = null;
       sendLifecycleEvent('TTS_PLAYBACK_END');
       if (isContinuousSessionRef.current) {
@@ -460,6 +478,7 @@ export const VoiceHud: React.FC<VoiceHudProps> = ({ onAppointmentBooked }) => {
     };
 
     utterance.onerror = (err) => {
+      clearTimeout(safetyTimer);
       console.warn('TTS playback ended/error:', err);
       activeUtteranceRef.current = null;
       sendLifecycleEvent('TTS_PLAYBACK_ERROR', { error: String(err) });
@@ -488,10 +507,11 @@ export const VoiceHud: React.FC<VoiceHudProps> = ({ onAppointmentBooked }) => {
         return;
       }
 
-      const savedId = localStorage.getItem('active_voice_conversation_id');
       const currentUser = ApiService.getCurrentUser();
       const patientId = currentUser?.patientId || '';
       const hospitalId = currentUser?.hospitalId || '';
+      const storageKey = patientId ? `active_voice_conversation_id_${patientId}` : 'active_voice_conversation_id';
+      const savedId = localStorage.getItem(storageKey);
 
       const queryParams = new URLSearchParams();
       if (savedId) queryParams.set('conversationId', savedId);
@@ -590,7 +610,9 @@ export const VoiceHud: React.FC<VoiceHudProps> = ({ onAppointmentBooked }) => {
             }
             if (data.conversationId) {
               setConversationId(data.conversationId);
-              localStorage.setItem('active_voice_conversation_id', data.conversationId);
+              const user = ApiService.getCurrentUser();
+              const key = user?.patientId ? `active_voice_conversation_id_${user.patientId}` : 'active_voice_conversation_id';
+              localStorage.setItem(key, data.conversationId);
             }
 
             setMessages((prev) => [

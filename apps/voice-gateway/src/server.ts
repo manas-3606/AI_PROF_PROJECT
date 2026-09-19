@@ -8,8 +8,8 @@ import crypto from 'node:crypto';
 
 const fastify = Fastify({ logger: false });
 
-// Maximum allowed capability/turn latency before emitting graceful fallback utterance
-const HARD_TURN_TIMEOUT_MS = 6000;
+// Maximum allowed capability/turn latency before emitting graceful fallback utterance (allows EHR failure-recovery & reconciliation)
+const HARD_TURN_TIMEOUT_MS = 12000;
 
 async function start() {
   await fastify.register(cors, { origin: '*' });
@@ -287,7 +287,7 @@ async function start() {
               );
               const fallbackResponse = {
                 spokenText:
-                  "Sorry for the delay, our hospital scheduling system is taking longer than usual to respond. Let me check your request again—could you please confirm your preferred day or doctor?",
+                  "Our hospital scheduling system is taking a few moments to synchronize. I am holding your request and checking your appointment status now.",
                 intentDetected: 'TURN_TIMEOUT_FALLBACK',
                 correlationId: turnCorrelationId,
               };

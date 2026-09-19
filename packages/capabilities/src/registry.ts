@@ -294,8 +294,8 @@ export class CapabilityRegistry {
           const nameFilter = cleanName
             ? {
                 OR: [
-                  { name: { contains: cleanName } },
-                  ...(lastName && lastName !== cleanName ? [{ name: { contains: lastName } }] : []),
+                  { name: { contains: cleanName, mode: 'insensitive' as const } },
+                  ...(lastName && lastName !== cleanName ? [{ name: { contains: lastName, mode: 'insensitive' as const } }] : []),
                 ],
               }
             : {};
@@ -304,7 +304,7 @@ export class CapabilityRegistry {
             where: {
               status: 'ACTIVE',
               ...(input.hospitalId ? { hospitalId: input.hospitalId } : {}),
-              ...(input.specialty ? { specialty: { contains: input.specialty } } : {}),
+              ...(input.specialty ? { specialty: { contains: input.specialty, mode: 'insensitive' as const } } : {}),
               ...nameFilter,
             },
             include: { hospital: true },
