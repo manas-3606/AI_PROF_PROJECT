@@ -32,7 +32,16 @@ describe('PRD Section 21 & Section 19: Sensitive PHI Log Redaction & Privacy Ver
 
     for (const cand of candidates) {
       if (SlotCalculator.isWithinWorkingHours(cand.startTime, cand.endTime, workingHours)) {
-        return cand;
+        const isBlocked = await prisma.blockedSlot.findFirst({
+          where: {
+            calendarId: doc.calendar.id,
+            startTime: { lt: cand.endTime },
+            endTime: { gt: cand.startTime },
+          },
+        });
+        if (!isBlocked) {
+          return cand;
+        }
       }
     }
 

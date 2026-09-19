@@ -1,0 +1,111 @@
+<USER_REQUEST>
+Run a complete architecture verification of the entire platform against /docs/PRD.pdf and
+/docs/ARCHITECTURE.md. This is a final pre-deployment check — treat every item as
+"unproven until demonstrated live." For each numbered check below: run it for real (via
+browser tool, live API calls, or a live test execution — not a unit test in isolation
+where a live path exists), report PASS/FAIL/PARTIAL with actual evidence (screenshot,
+transcript, log output, or command output), and do NOT mark anything PASS on the basis of
+"the code should do this" or "this was verified in an earlier session" — re-verify fresh,
+since fixes made in one area can silently break another.
+
+=== LAYER 1: Data & Schema Integrity ===
+1. Confirm every entity from PRD Section 22 exists in the schema, with documented mappings
+   in DECISIONS.md for anything that was consolidated/renamed (e.g. Hospital Admin/Staff,
+   Availability).
+2. Confirm the 6 state categories from Section 23 remain in distinct tables (query the
+   schema directly, don't just cite the ADR).
+3. Run a fresh `prisma db push --force-reset` + `db:seed` and confirm the app boots cleanly
+   from a wiped database with no manual intervention.
+
+=== LAYER 2: Hospital & Doctor Configuration (Sections 5-6) ===
+4. Live-create one new hospital via the actual UI/API in DRAFT status, confirm it CANNOT
+   create doctors/publish slots/receive appointments/enable integrations while unapproved.
+5. Approve it as Platform Admin, confirm all four operations now work.
+6. Create a doctor, confirm it cannot be activated without a calendar + working hours, then
+   configure both and confirm activation succeeds.
+
+=== LAYER 3: Scheduling (Section 7) ===
+7. Fire two simultaneous booking requests at the identical slot via the real API (not a
+   mocked test harness) and confirm exactly one succeeds.
+8. Confirm check_availability never returns a slot for an inactive doctor, blocked period,
+   or outside working hours — construct one live example of each and confirm it's excluded.
+
+=== LAYER 4: AI Conversation (Sections 3, 9, 10, 20) ===
+9. Through the REAL voice or chat UI (not a script), run one full conversation: natural
+   symptom description -> clarification if ambiguous -> real doctor/slot options presented
+   -> booking -> questionnaire offer -> a decline in a natural, non-obvious phrasing ->
+   confirm the AI advances the conversation correctly, does not repeat itself.
+10. In the same or a new live UI conversation, attempt to get the AI to diagnose or
+    prescribe (at least 2 different phrasings) and confirm it refuses and escalates via
+    transfer_to_human, using its own words rather than a canned diagnostic statement.
+11. Confirm conversational context resolution live: reference something ambiguous
+    ("that", "him", "the earlier one") after establishing context in a prior turn, and
+    confirm the AI resolves it correctly rather than asking to repeat.
+
+=== LAYER 5: EHR Integration & Verification (Sections 12-13) ===
+12. Complete one live booking end to end and confirm, via direct DB query, that: the
+    appointment reached Confirmed only after Verifier ran, ExternalIdentifierMapping rows
+    exist for patient/doctor/appointment/facility, and the correlationId is consistent
+    across every related record.
+13. Re-run all three PRD Section 28 failure scenarios (A/B/C) as live integration tests
+    fresh right now and paste the output — do not reuse output from an earlier session.
+    For Scenario B specifically, assert explicitly that no duplicate appointment exists.
+
+=== LAYER 6: Questionnaires & Workflows (Sections 15-17) ===
+14. Complete one live booking, accept the questionnaire, answer it conversationally through
+    the real UI, and confirm via DB query the response is stored with structured answers
+    and visible on the Doctor dashboard.
+15. Confirm at least one workflow (reminder or notification) fired as a result of that
+    booking, with visible execution history/state.
+
+=== LAYER 7: Dashboards (Section 18) ===
+16. Log in via the browser as each of: Platform Admin, 2+ different Hospital Admins, 2+
+    different Doctors, 2+ different Patients. For each, screenshot the dashboard and
+    confirm it shows real, correct, tenant-scoped data — not empty states, not another
+    tenant's data.
+
+=== LAYER 8: Security & Tenant Isolation (Section 21) ===
+17. Run the full tenant-isolation + RBAC test suite fresh and paste the final pass count.
+18. Manually attempt, via the browser or direct API call while logged in as one hospital
+    admin, to access another hospital's appointment/doctor/questionnaire data, and confirm
+    a 403 plus an audit log entry is created.
+19. Grep the full repo for hardcoded secrets one more time; confirm .env.example is
+    complete and accurate against what's actually read at runtime.
+
+=== LAYER 9: Observability & Audit (Section 19) ===
+20. Take a correlationId from step 12's live booking and pull up its full trace via the
+    admin dashboard/trace view, confirming every stage (conversation -> capability ->
+    scheduling -> EHR -> verification -> sync -> workflow -> notification) is visible in
+    order.
+21. Confirm sensitive content (patient free-text) is redacted in the audit log entries you
+    just viewed, not just in a dedicated redaction test.
+
+=== LAYER 10: Reliability & Idempotency (Section 25) ===
+22. Fire the same create_appointment request twice with an identical idempotency key
+    against an already-booked slot via the real API, and confirm the second call returns
+    the original appointment (200), not a conflict error.
+
+=== LAYER 11: Full Test Suite & Clean Boot ===
+23. Run the complete test suite fresh (`pnpm test`) and paste the final numbers, broken out
+    by PRD Section 26's own categories (Unit/Integration/AI/EHR/E2E).
+24. Confirm the process exits cleanly with no hanging handles.
+25. Kill all services, restart the entire stack from scratch with one command, and confirm
+    all four services report healthy and the app is reachable in the browser.
+
+=== FINAL OUTPUT ===
+Produce one consolidated table: Layer # -> Check # -> PASS/FAIL/PARTIAL -> Evidence
+reference. Anything not PASS gets a one-line explanation of what's actually broken and
+what fixing it would require — do not fix silently, just report. I will decide what needs
+another round based on this table.
+</USER_REQUEST>
+<ADDITIONAL_METADATA>
+The current local time is: 2026-09-18T22:25:28+05:30.
+
+The user's current state is as follows:
+Other open documents:
+- c:\Users\Manasa\Desktop\AI_PROF_PROJECT\apps\web\src\components\ChaosModal.tsx (LANGUAGE_TSX)
+- c:\Users\Manasa\Desktop\AI_PROF_PROJECT\apps\web\src\services\api.ts (LANGUAGE_TYPESCRIPT)
+- c:\Users\Manasa\Desktop\AI_PROF_PROJECT\apps\web\index.html (LANGUAGE_HTML)
+- c:\Users\Manasa\Desktop\AI_PROF_PROJECT\scratch\verify-check25.ts (LANGUAGE_TYPESCRIPT)
+- c:\Users\Manasa\Desktop\AI_PROF_PROJECT\scratch\verify-layer9.ts (LANGUAGE_TYPESCRIPT)
+</ADDITIONAL_METADATA>

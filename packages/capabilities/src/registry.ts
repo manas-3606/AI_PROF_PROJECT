@@ -70,8 +70,8 @@ import {
   TransferToHumanOutput,
   AppointmentStatus,
 } from '@health/shared-types';
-import { SlotCalculator, SchedulingService } from '@health/scheduling';
-import { IdentifierMapper, HealthcareConnector } from '@health/integration';
+import { SlotCalculator, SchedulingService, ConcurrencyLockManager } from '@health/scheduling';
+import { IdentifierMapper, HealthcareConnector, MockEhrConnector } from '@health/integration';
 import { Verifier, Synchronizer } from '@health/verification';
 import { WorkflowQueueManager } from '@health/workflows';
 import { ConversationContextManager } from './context-manager.js';
@@ -104,7 +104,7 @@ export interface CapabilityMetadata {
 }
 
 export class CapabilityRegistry {
-  private static connector: HealthcareConnector = new StubEhrConnector();
+  private static connector: HealthcareConnector = new MockEhrConnector();
   private static verifier = new Verifier(CapabilityRegistry.connector as any);
   private static synchronizer = new Synchronizer(CapabilityRegistry.connector as any);
 
@@ -247,8 +247,11 @@ export class CapabilityRegistry {
             },
           });
 
+          const seenHospitalIds = new Set<string>();
           const rawHospitals = hospitals
             .filter((h) => {
+              if (seenHospitalIds.has(h.id)) return false;
+              seenHospitalIds.add(h.id);
               if (!input.specialty) return true;
               const specs = JSON.parse(h.specialtiesJson || '[]');
               return specs.some((s: string) => s.toLowerCase().includes(input.specialty!.toLowerCase()));
@@ -286,18 +289,32 @@ export class CapabilityRegistry {
             );
           }
 
+          const cleanName = input.name ? input.name.replace(/^(?:dr\.?|doctor)\s+/i, '').trim() : undefined;
+          const lastName = cleanName ? cleanName.split(/\s+/).pop() : undefined;
+          const nameFilter = cleanName
+            ? {
+                OR: [
+                  { name: { contains: cleanName } },
+                  ...(lastName && lastName !== cleanName ? [{ name: { contains: lastName } }] : []),
+                ],
+              }
+            : {};
+
           const doctors = await prisma.doctor.findMany({
             where: {
               status: 'ACTIVE',
               ...(input.hospitalId ? { hospitalId: input.hospitalId } : {}),
               ...(input.specialty ? { specialty: { contains: input.specialty } } : {}),
-              ...(input.name ? { name: { contains: input.name } } : {}),
+              ...nameFilter,
             },
             include: { hospital: true },
           });
 
+          const seenDoctorIds = new Set<string>();
           const rawDoctors = doctors
             .filter((d) => {
+              if (seenDoctorIds.has(d.id)) return false;
+              seenDoctorIds.add(d.id);
               if (!input.language) return true;
               const langs = JSON.parse(d.languagesJson || '[]');
               return langs.some((l: string) => l.toLowerCase() === input.language!.toLowerCase());
@@ -569,6 +586,22 @@ export class CapabilityRegistry {
               (await IdentifierMapper.getExternalId(input.hospitalId, 'DOCTOR', input.doctorId)) ||
               `EXT-DOC-${input.doctorId.slice(0, 6)}`;
 
+            const connection = await prisma.healthcareSystemConnection.findFirst({
+              where: { hospitalId: input.hospitalId },
+            });
+            const connectionId = connection?.id || `conn-${input.hospitalId}`;
+
+            // Record EHR_DISPATCH operational event (PRD Section 19)
+            await prisma.operationalEvent.create({
+              data: {
+                hospitalId: input.hospitalId,
+                eventType: 'EHR_DISPATCH',
+                severity: 'INFO',
+                message: `Dispatching appointment creation to external EHR for internal appointment ${appointment.id}`,
+                correlationId,
+              },
+            });
+
             let externalAppointmentId: string | undefined = undefined;
             let finalStatus: AppointmentStatus = AppointmentStatus.CONFIRMED;
 
@@ -582,6 +615,37 @@ export class CapabilityRegistry {
                 reason: input.reason,
               });
               externalAppointmentId = ehrResult.externalAppointmentId;
+
+              // Record IntegrationOperation SUCCESS
+              await prisma.integrationOperation.create({
+                data: {
+                  connectionId,
+                  hospitalId: input.hospitalId,
+                  operationType: 'APPOINTMENT_CREATE',
+                  status: 'SUCCESS',
+                  requestJson: JSON.stringify({
+                    internalAppointmentId: appointment.id,
+                    externalPatientId: extPatientId,
+                    externalProviderId: extDoctorId,
+                    startTime: appointment.startTime.toISOString(),
+                    endTime: appointment.endTime.toISOString(),
+                    reason: input.reason,
+                  }),
+                  responseJson: JSON.stringify(ehrResult),
+                  correlationId,
+                },
+              });
+
+              // Record EHR_CREATE_SUCCESS operational event (PRD Section 19)
+              await prisma.operationalEvent.create({
+                data: {
+                  hospitalId: input.hospitalId,
+                  eventType: 'EHR_CREATE_SUCCESS',
+                  severity: 'INFO',
+                  message: `External EHR successfully created appointment: external ID ${externalAppointmentId}`,
+                  correlationId,
+                },
+              });
 
               // STEP 3: AWAIT VERIFICATION
               const verification = await this.verifier.verifyAppointment(
@@ -610,6 +674,45 @@ export class CapabilityRegistry {
 
                 await SchedulingService.updateAppointmentStatus(appointment.id, finalStatus, externalAppointmentId);
 
+                // Dispatch Appointment Confirmation Notification to Patient (PRD Section 17)
+                const patient = await prisma.patient.findUnique({ where: { id: input.patientId } });
+                await prisma.notification.create({
+                  data: {
+                    hospitalId: input.hospitalId,
+                    recipientId: input.patientId,
+                    recipientType: 'Patient',
+                    channel: patient?.communicationPreference || 'sms',
+                    templateId: 'APPOINTMENT_CONFIRMATION',
+                    payloadJson: JSON.stringify({
+                      appointmentId: appointment.id,
+                      doctorName: appointment.doctor.name,
+                      startTime: appointment.startTime.toISOString(),
+                      hospitalName: appointment.hospital.name,
+                      correlationId,
+                    }),
+                    status: 'Delivered',
+                  },
+                });
+
+                // Dispatch New Appointment Notification to Doctor (PRD Section 17)
+                await prisma.notification.create({
+                  data: {
+                    hospitalId: input.hospitalId,
+                    recipientId: input.doctorId,
+                    recipientType: 'Doctor',
+                    channel: 'in_app',
+                    templateId: 'NEW_APPOINTMENT',
+                    payloadJson: JSON.stringify({
+                      appointmentId: appointment.id,
+                      patientId: input.patientId,
+                      patientName: patient?.name || 'Patient',
+                      startTime: appointment.startTime.toISOString(),
+                      correlationId,
+                    }),
+                    status: 'Delivered',
+                  },
+                });
+
                 // Asynchronously trigger post-confirmation workflow (questionnaire + reminder)
                 try {
                   await WorkflowQueueManager.enqueue({
@@ -622,7 +725,23 @@ export class CapabilityRegistry {
                       doctorId: input.doctorId,
                       patientId: input.patientId,
                       startTime: appointment.startTime.toISOString(),
+                      correlationId,
                     },
+                    correlationId,
+                  });
+
+                  await WorkflowQueueManager.enqueue({
+                    workflowExecutionId: crypto.randomUUID(),
+                    workflowType: 'AppointmentReminder',
+                    hospitalId: input.hospitalId,
+                    appointmentId: appointment.id,
+                    payload: {
+                      appointmentId: appointment.id,
+                      doctorName: appointment.doctor.name,
+                      startTime: appointment.startTime.toISOString(),
+                      correlationId,
+                    },
+                    condition: 'APPOINTMENT_NOT_CANCELLED',
                     correlationId,
                   });
                 } catch (wfErr) {
@@ -630,9 +749,75 @@ export class CapabilityRegistry {
                 }
               } else {
                 finalStatus = AppointmentStatus.SYNCHRONIZATION_PENDING;
-                await SchedulingService.updateAppointmentStatus(appointment.id, finalStatus);
+                await SchedulingService.updateAppointmentStatus(
+                  appointment.id,
+                  finalStatus,
+                  externalAppointmentId,
+                  'External EHR verification pending',
+                  correlationId
+                );
+
+                await prisma.reconciliationRecord.create({
+                  data: {
+                    appointmentId: appointment.id,
+                    hospitalId: input.hospitalId,
+                    reason: 'EHR_VERIFICATION_PENDING',
+                    externalSystemId: 'MOCK_EHR',
+                    externalRecordFound: Boolean(externalAppointmentId),
+                    attemptCount: 1,
+                    status: 'OPEN',
+                    escalatedTo: 'PlatformOperationsDesk',
+                  },
+                }).catch(() => {});
               }
             } catch (ehrError: any) {
+              await SchedulingService.updateAppointmentStatus(
+                appointment.id,
+                AppointmentStatus.SYNCHRONIZATION_PENDING,
+                undefined,
+                `EHR integration failure: ${ehrError.message}`,
+                correlationId
+              ).catch(() => {});
+
+              const reason = ehrError.message?.toLowerCase().includes('timeout')
+                ? 'EHR_TIMEOUT'
+                : 'EHR_GATEWAY_FAILURE';
+
+              await prisma.reconciliationRecord.create({
+                data: {
+                  appointmentId: appointment.id,
+                  hospitalId: input.hospitalId,
+                  reason,
+                  externalSystemId: 'MOCK_EHR',
+                  externalRecordFound: false,
+                  attemptCount: 1,
+                  status: 'OPEN',
+                  escalatedTo: 'PlatformOperationsDesk',
+                },
+              }).catch(() => {});
+
+              await prisma.integrationOperation.create({
+                data: {
+                  connectionId,
+                  hospitalId: input.hospitalId,
+                  operationType: 'APPOINTMENT_CREATE',
+                  status: 'FAILED',
+                  requestJson: JSON.stringify({ internalAppointmentId: appointment.id }),
+                  error: ehrError.message,
+                  correlationId,
+                },
+              }).catch(() => {});
+
+              await prisma.operationalEvent.create({
+                data: {
+                  hospitalId: input.hospitalId,
+                  eventType: ehrError.message?.toLowerCase().includes('timeout') ? 'EHR_TIMEOUT' : 'EHR_CREATE_FAILED',
+                  severity: 'ERROR',
+                  message: `External EHR booking failure: ${ehrError.message}`,
+                  correlationId,
+                },
+              }).catch(() => {});
+
               logger.error({ ehrError, appointmentId: appointment.id }, 'EHR call failed during create_appointment');
               throw new CapabilityExternalFailureError(
                 `Healthcare integration failed: ${ehrError.message}`,
@@ -736,6 +921,11 @@ export class CapabilityRegistry {
                 `EXT-APPT-${appt.id.slice(0, 8)}`;
             }
 
+            const conn = await prisma.healthcareSystemConnection.findFirst({
+              where: { hospitalId: appt.hospitalId },
+            });
+            const connectionId = conn?.id || `conn-${appt.hospitalId}`;
+
             await this.connector.rescheduleAppointment({
               internalAppointmentId: rescheduled.id,
               externalAppointmentId: extAppointmentId,
@@ -743,6 +933,33 @@ export class CapabilityRegistry {
               newEndTime: rescheduled.endTime.toISOString(),
               reason: 'Patient rescheduled appointment',
             });
+
+            await prisma.integrationOperation.create({
+              data: {
+                connectionId,
+                hospitalId: appt.hospitalId,
+                operationType: 'APPOINTMENT_RESCHEDULE',
+                status: 'SUCCESS',
+                requestJson: JSON.stringify({
+                  internalAppointmentId: rescheduled.id,
+                  externalAppointmentId: extAppointmentId,
+                  newStartTime: rescheduled.startTime.toISOString(),
+                  newEndTime: rescheduled.endTime.toISOString(),
+                }),
+                responseJson: JSON.stringify({ success: true, rescheduled: true }),
+                correlationId,
+              },
+            }).catch(() => {});
+
+            await prisma.operationalEvent.create({
+              data: {
+                hospitalId: appt.hospitalId,
+                eventType: 'EHR_RESCHEDULE_SUCCESS',
+                severity: 'INFO',
+                message: `External EHR rescheduled appointment ${rescheduled.id}`,
+                correlationId,
+              },
+            }).catch(() => {});
 
             // STEP 3: Await verification
             await this.verifier.verifyAppointment(rescheduled.id, appt.hospitalId, extAppointmentId);
@@ -754,6 +971,42 @@ export class CapabilityRegistry {
               AppointmentStatus.CONFIRMED,
               extAppointmentId
             );
+
+            // Dispatch Reschedule notifications (PRD Section 17)
+            const patient = await prisma.patient.findUnique({ where: { id: appt.patientId } });
+            await prisma.notification.create({
+              data: {
+                hospitalId: appt.hospitalId,
+                recipientId: appt.patientId,
+                recipientType: 'Patient',
+                channel: patient?.communicationPreference || 'sms',
+                templateId: 'APPOINTMENT_RESCHEDULED_CONFIRMATION',
+                payloadJson: JSON.stringify({
+                  appointmentId: rescheduled.id,
+                  doctorName: appt.doctor.name,
+                  startTime: rescheduled.startTime.toISOString(),
+                  correlationId,
+                }),
+                status: 'Delivered',
+              },
+            }).catch(() => {});
+
+            await prisma.notification.create({
+              data: {
+                hospitalId: appt.hospitalId,
+                recipientId: appt.doctorId,
+                recipientType: 'Doctor',
+                channel: 'in_app',
+                templateId: 'APPOINTMENT_RESCHEDULED',
+                payloadJson: JSON.stringify({
+                  appointmentId: rescheduled.id,
+                  patientId: appt.patientId,
+                  startTime: rescheduled.startTime.toISOString(),
+                  correlationId,
+                }),
+                status: 'Delivered',
+              },
+            }).catch(() => {});
 
             const rawResult = {
               appointmentId: rescheduled.id,
@@ -817,23 +1070,192 @@ export class CapabilityRegistry {
           }
 
           try {
-            // STEP 1: Cancel internal appointment and release slot
-            const cancelled = await SchedulingService.cancelAppointment(input.appointmentId, input.reason);
+            // STEP 1: Enter intermediate state (Section 14: Synchronization Pending)
+            // Do NOT release slot yet and do NOT mark cancelled yet!
+            await prisma.appointment.update({
+              where: { id: appt.id },
+              data: {
+                status: AppointmentStatus.SYNCHRONIZATION_PENDING,
+                reason: input.reason ? `Cancellation requested: ${input.reason}` : 'Cancellation requested by patient',
+              },
+            });
+            await prisma.appointmentStateHistory.create({
+              data: {
+                appointmentId: appt.id,
+                hospitalId: appt.hospitalId,
+                fromStatus: appt.status,
+                toStatus: AppointmentStatus.SYNCHRONIZATION_PENDING,
+                reason: input.reason || 'Cancellation requested - awaiting external EHR synchronization',
+              },
+            });
 
-            // STEP 2: Call integration cancel
+            // STEP 2: Call integration cancel on external EHR
             let extApptId: string | null | undefined = appt.externalAppointmentId;
             if (!extApptId) {
               extApptId = (await IdentifierMapper.getExternalId(appt.hospitalId, 'APPOINTMENT', appt.id)) || undefined;
             }
+            const conn = await prisma.healthcareSystemConnection.findFirst({
+              where: { hospitalId: appt.hospitalId },
+            });
+            const connectionId = conn?.id || `conn-${appt.hospitalId}`;
+
             if (extApptId) {
-              await this.connector.cancelAppointment(extApptId);
+              const cancelSuccess = await this.connector.cancelAppointment(extApptId);
+              if (!cancelSuccess) {
+                await prisma.integrationOperation.create({
+                  data: {
+                    connectionId,
+                    hospitalId: appt.hospitalId,
+                    operationType: 'APPOINTMENT_CANCEL',
+                    status: 'FAILED',
+                    requestJson: JSON.stringify({ externalAppointmentId: extApptId }),
+                    correlationId,
+                  },
+                }).catch(() => {});
+
+                await prisma.reconciliationRecord.create({
+                  data: {
+                    appointmentId: appt.id,
+                    hospitalId: appt.hospitalId,
+                    reason: 'EHR_CANCELLATION_FAILED',
+                    externalSystemId: 'MOCK_EHR',
+                    externalRecordFound: Boolean(extApptId),
+                    attemptCount: 1,
+                    status: 'OPEN',
+                    escalatedTo: 'PlatformOperationsDesk',
+                  },
+                }).catch(() => {});
+
+                logger.error({ appointmentId: appt.id, extApptId }, 'External EHR cancellation request failed');
+                throw new CapabilityExternalFailureError(
+                  'External EHR failed to process cancellation request. Appointment remains in Synchronization Pending.',
+                  name,
+                  correlationId
+                );
+              }
+
+              await prisma.integrationOperation.create({
+                data: {
+                  connectionId,
+                  hospitalId: appt.hospitalId,
+                  operationType: 'APPOINTMENT_CANCEL',
+                  status: 'SUCCESS',
+                  requestJson: JSON.stringify({ externalAppointmentId: extApptId }),
+                  responseJson: JSON.stringify({ success: true, cancelled: true }),
+                  correlationId,
+                },
+              }).catch(() => {});
+
+              await prisma.operationalEvent.create({
+                data: {
+                  hospitalId: appt.hospitalId,
+                  eventType: 'EHR_CANCEL_SUCCESS',
+                  severity: 'INFO',
+                  message: `External EHR cancelled appointment ${appt.id}`,
+                  correlationId,
+                },
+              }).catch(() => {});
             }
 
-            // STEP 3: Synchronize cancelled state
-            await SchedulingService.updateAppointmentStatus(cancelled.id, AppointmentStatus.CANCELLED);
+            // STEP 3: Await external EHR verification
+            const verifyResult = await this.verifier.verifyAppointmentCancellation(
+              appt.id,
+              appt.hospitalId,
+              extApptId
+            );
+
+            if (!verifyResult.isVerified) {
+              await prisma.reconciliationRecord.create({
+                data: {
+                  appointmentId: appt.id,
+                  hospitalId: appt.hospitalId,
+                  reason: 'EHR_CANCELLATION_UNVERIFIED',
+                  externalSystemId: 'MOCK_EHR',
+                  externalRecordFound: Boolean(extApptId),
+                  attemptCount: 1,
+                  status: 'OPEN',
+                  escalatedTo: 'PlatformOperationsDesk',
+                },
+              }).catch(() => {});
+
+              logger.warn({ appointmentId: appt.id, verifyResult }, 'External cancellation verification failed or not confirmed');
+              throw new CapabilityExternalFailureError(
+                'External EHR verification could not confirm cancellation. Appointment remains in Synchronization Pending.',
+                name,
+                correlationId
+              );
+            }
+
+            // STEP 4: Only now synchronize Cancelled state and release slot on doctor grid
+            await prisma.appointment.update({
+              where: { id: appt.id },
+              data: {
+                status: AppointmentStatus.CANCELLED,
+                reason: input.reason ? `Cancelled: ${input.reason}` : 'Cancelled by patient',
+              },
+            });
+            await prisma.appointmentStateHistory.create({
+              data: {
+                appointmentId: appt.id,
+                hospitalId: appt.hospitalId,
+                fromStatus: AppointmentStatus.SYNCHRONIZATION_PENDING,
+                toStatus: AppointmentStatus.CANCELLED,
+                reason: 'Cancellation verified in external EHR',
+              },
+            });
+
+            // Release slot atomically & update isBooked on doctor grid
+            await ConcurrencyLockManager.releaseSlot(appt.slotId);
+            await prisma.slot.update({
+              where: { id: appt.slotId },
+              data: { isBooked: false },
+            });
+
+            // STEP 5: Fire patient confirmation notification + doctor alert notification
+            const doctor = await prisma.doctor.findUnique({ where: { id: appt.doctorId } });
+            const patient = await prisma.patient.findUnique({ where: { id: appt.patientId } });
+
+            // 1) Patient confirmation notification (SMS)
+            await prisma.notification.create({
+              data: {
+                hospitalId: appt.hospitalId,
+                recipientId: appt.patientId,
+                recipientType: 'Patient',
+                channel: patient?.communicationPreference || 'sms',
+                templateId: 'APPOINTMENT_CANCELLED_CONFIRMATION',
+                payloadJson: JSON.stringify({
+                  appointmentId: appt.id,
+                  doctorName: doctor?.name || 'Doctor',
+                  startTime: appt.startTime,
+                  reason: input.reason || 'Patient request',
+                }),
+                status: 'Delivered',
+              },
+            }).catch((err) => logger.warn({ err }, 'Could not dispatch patient cancellation confirmation notification'));
+
+            // 2) Doctor alert notification (In-app)
+            await prisma.notification.create({
+              data: {
+                hospitalId: appt.hospitalId,
+                recipientId: appt.doctorId,
+                recipientType: 'Doctor',
+                channel: 'in_app',
+                templateId: 'APPOINTMENT_CANCELLED_ALERT',
+                payloadJson: JSON.stringify({
+                  appointmentId: appt.id,
+                  patientId: appt.patientId,
+                  patientName: patient?.name || 'Patient',
+                  slotId: appt.slotId,
+                  startTime: appt.startTime,
+                  status: 'Cancelled',
+                  notice: 'Slot released back to doctor calendar',
+                }),
+                status: 'Delivered',
+              },
+            }).catch((err) => logger.warn({ err }, 'Could not dispatch doctor cancellation alert notification'));
 
             const rawResult = {
-              appointmentId: cancelled.id,
+              appointmentId: appt.id,
               status: AppointmentStatus.CANCELLED,
               slotReleased: true,
             };
@@ -843,6 +1265,21 @@ export class CapabilityRegistry {
               await IdempotencyManager.saveResult(name, input.idempotencyKey, result);
             }
           } catch (cancelErr: any) {
+            await prisma.reconciliationRecord.create({
+              data: {
+                appointmentId: appt.id,
+                hospitalId: appt.hospitalId,
+                reason: cancelErr.message?.toLowerCase().includes('timeout')
+                  ? 'EHR_TIMEOUT'
+                  : 'EHR_CANCELLATION_ERROR',
+                externalSystemId: 'MOCK_EHR',
+                externalRecordFound: false,
+                attemptCount: 1,
+                status: 'OPEN',
+                escalatedTo: 'PlatformOperationsDesk',
+              },
+            }).catch(() => {});
+
             if (input.idempotencyKey) {
               await IdempotencyManager.release(name, input.idempotencyKey);
             }
@@ -853,7 +1290,7 @@ export class CapabilityRegistry {
 
         // ---------------------------------------------------------------------
         // 9. get_questionnaire
-        // Hierarchical lookup: doctor -> appointmentType -> specialty -> hospital default
+        // Hierarchical lookup: doctor -> doctor specialty/dept -> appointmentType -> specialty -> hospital default
         // ---------------------------------------------------------------------
         case 'get_questionnaire': {
           const input = this.parseInput(GetQuestionnaireInputSchema, rawInput, name, correlationId);
@@ -867,12 +1304,34 @@ export class CapabilityRegistry {
           }
 
           let questionnaire = null;
+          let targetSpecialty = input.specialty;
+
+          // If doctorId is provided, resolve doctor's specialty/department
           if (input.doctorId) {
+            const doctor = await prisma.doctor.findUnique({
+              where: { id: input.doctorId },
+            });
+            if (doctor) {
+              targetSpecialty = targetSpecialty || doctor.specialty || doctor.department;
+            }
+            // Check if doctor has an explicit doctor-assigned questionnaire
             questionnaire = await prisma.questionnaire.findFirst({
               where: { hospitalId: input.hospitalId, doctorId: input.doctorId },
               include: { questions: { orderBy: { orderIndex: 'asc' } } },
             });
           }
+
+          // Next try matching by resolved specialty
+          if (!questionnaire && targetSpecialty) {
+            questionnaire = await prisma.questionnaire.findFirst({
+              where: {
+                hospitalId: input.hospitalId,
+                specialty: targetSpecialty,
+              },
+              include: { questions: { orderBy: { orderIndex: 'asc' } } },
+            });
+          }
+
           if (!questionnaire && (input.appointmentType || input.appointmentTypeId)) {
             const apptType = input.appointmentType || input.appointmentTypeId;
             questionnaire = await prisma.questionnaire.findFirst({
@@ -880,12 +1339,14 @@ export class CapabilityRegistry {
               include: { questions: { orderBy: { orderIndex: 'asc' } } },
             });
           }
+
           if (!questionnaire && input.specialty) {
             questionnaire = await prisma.questionnaire.findFirst({
               where: { hospitalId: input.hospitalId, specialty: input.specialty },
               include: { questions: { orderBy: { orderIndex: 'asc' } } },
             });
           }
+
           if (!questionnaire) {
             questionnaire = await prisma.questionnaire.findFirst({
               where: { hospitalId: input.hospitalId },

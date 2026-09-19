@@ -25,7 +25,9 @@ export interface ExternalReschedulePayload {
 export interface HealthcareConnector {
   createAppointment(payload: ExternalAppointmentPayload): Promise<ExternalAppointmentResult>;
   rescheduleAppointment(payload: ExternalReschedulePayload): Promise<ExternalAppointmentResult>;
+  updateAppointment?(externalAppointmentId: string, updates: Partial<ExternalAppointmentPayload>): Promise<ExternalAppointmentResult>;
   getAppointment(externalAppointmentId: string): Promise<ExternalAppointmentResult | null>;
+  retrieveAppointment?(externalAppointmentId: string): Promise<ExternalAppointmentResult | null>;
   verifyAppointment(internalAppointmentId: string, externalAppointmentId?: string): Promise<{
     isVerified: boolean;
     externalStatus: string;
@@ -36,5 +38,22 @@ export interface HealthcareConnector {
     externalPatientId: string;
     name: string;
     phone: string;
+    dob?: string;
   } | null>;
+  lookupProvider(identifier: { externalProviderId?: string; name?: string }): Promise<{
+    externalProviderId: string;
+    name: string;
+    specialty: string;
+  } | null>;
+  lookupFacility(identifier: { externalFacilityId?: string; name?: string }): Promise<{
+    externalFacilityId: string;
+    name: string;
+    address?: string;
+  } | null>;
+  lookupAvailability(
+    externalProviderId: string,
+    startDate: string,
+    endDate: string
+  ): Promise<Array<{ startTime: string; endTime: string; available: boolean }>>;
 }
+

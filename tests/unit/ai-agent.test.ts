@@ -292,23 +292,23 @@ describe('Unit Tests: AI Patient Access Agent (PRD Section 9, 10, 20, 26)', () =
     it('detects verification intent and executes verify_external_appointment capability', async () => {
       const convId = crypto.randomUUID();
 
-      // Create a test appointment
-      const appt = await prisma.appointment.create({
-        data: {
+      // Create a test appointment via capability so it is verified in EHR
+      const booking = await CapabilityRegistry.execute(
+        'create_appointment',
+        {
           hospitalId: testHospital.id,
           doctorId: testDoctor.id,
           patientId: testPatient.id,
           slotId: testSlots[0].id,
-          status: 'Confirmed',
-          startTime: testSlots[0].startTime,
-          endTime: testSlots[0].endTime,
+          reason: 'Verification test booking',
           idempotencyKey: crypto.randomUUID(),
         },
-      });
+        { userRole: 'PATIENT', hospitalId: testHospital.id, patientId: testPatient.id }
+      );
 
       // Set context with active appointment
       await ConversationContextManager.updateContext(convId, {
-        activeAppointmentId: appt.id,
+        activeAppointmentId: booking.appointmentId,
       });
 
       const agent = new PatientAccessAgent({ conversationId: convId });
@@ -467,6 +467,34 @@ describe('Unit Tests: AI Patient Access Agent (PRD Section 9, 10, 20, 26)', () =
         dialogue: turnsLogged,
       });
     });
+
+    it('Cardiology Discovery & Confirmation Flow: "cardiologist for heart pain" -> "yes" checks availability without resetting to greeting', async () => {
+      const convId = crypto.randomUUID();
+      const agent = new PatientAccessAgent({
+        conversationId: convId,
+        patientId: testPatient.id,
+      });
+
+      // Turn 1: Patient asks for cardiologist for heart pain
+      const turn1 = await agent.processTurn('I am looking for a cardiologist for my heart pain');
+      assert.strictEqual(turn1.intentDetected, 'DISCOVERED_CARDIOLOGY');
+      assert.match(turn1.responseText, /Dr\. Maya Patel/i);
+      assert.match(turn1.responseText, /Would you like me to check their appointments/i);
+
+      // Turn 2: Patient says "yes"
+      const turn2 = await agent.processTurn('yes');
+      assert.strictEqual(turn2.intentDetected, 'CHECKED_DOCTOR_AVAILABILITY');
+      assert.doesNotMatch(turn2.responseText, /Hello! I am your AI Patient Access Assistant/i);
+      assert.match(turn2.responseText, /Dr\. Maya Patel has openings on/i);
+      assert.match(turn2.responseText, /Would you like to book one of these\?/i);
+
+      // Turn 3: Patient confirms booking with "yes"
+      const turn3 = await agent.processTurn('yes');
+      assert.strictEqual(turn3.intentDetected, 'BOOKING_CONFIRMED');
+      assert.strictEqual(turn3.capabilityCalled, 'create_appointment');
+      assert.match(turn3.responseText, /Dr\. Maya Patel/i);
+      assert.match(turn3.responseText, /confirmed/i);
+    });
   });
 
   // ---------------------------------------------------------------------------
@@ -550,6 +578,28 @@ describe('Unit Tests: AI Patient Access Agent (PRD Section 9, 10, 20, 26)', () =
 
       refusalTranscripts.push({
         test: 'Case 4: Reporting Patient Words ("You reported knee pain") vs Clinical Conclusion',
+        dialogue: [
+          { user: userUtterance, agent: turn.responseText, transferredToHuman: false },
+        ],
+      });
+    });
+
+    it('Refusal Case 5 (Reporting Neck Pain & Direct Booking Pathway): "I am having severe neck pain." -> Discovers Orthopedic/Spine Specialist and offers slots', async () => {
+      const convId = crypto.randomUUID();
+      const agent = new PatientAccessAgent({ conversationId: convId, patientId: testPatient.id });
+
+      const userUtterance = 'I am having severe neck pain.';
+      const turn = await agent.processTurn(userUtterance);
+
+      assert.strictEqual(turn.transferredToHuman, false);
+      assert.strictEqual(turn.intentDetected, 'DISCOVERED_ORTHOPEDICS');
+      assert.strictEqual(turn.capabilityCalled, 'check_availability');
+      assert.match(turn.responseText, /You reported neck pain/i);
+      assert.match(turn.responseText, /Dr\. Arvind Rao/i);
+      assert.doesNotMatch(turn.responseText, /Hello! I am your AI Patient Access Assistant/i);
+
+      refusalTranscripts.push({
+        test: 'Case 5: Reporting Patient Words ("You reported neck pain") & Availability Lookup',
         dialogue: [
           { user: userUtterance, agent: turn.responseText, transferredToHuman: false },
         ],

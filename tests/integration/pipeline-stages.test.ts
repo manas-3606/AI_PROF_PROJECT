@@ -45,12 +45,22 @@ describe('Integration Test: 7-Stage Architectural Pipeline Handoffs (PRD Section
     let foundSlot = null;
     for (const cand of candidates) {
       if (SlotCalculator.isWithinWorkingHours(cand.startTime, cand.endTime, workingHours)) {
-        foundSlot = cand;
-        break;
+        const isBlocked = await prisma.blockedSlot.findFirst({
+          where: {
+            calendarId: doctor.calendar.id,
+            startTime: { lt: cand.endTime },
+            endTime: { gt: cand.startTime },
+          },
+        });
+        if (!isBlocked) {
+          foundSlot = cand;
+          break;
+        }
       }
     }
 
     if (foundSlot) {
+      await prisma.appointment.deleteMany({ where: { slotId: foundSlot.id } });
       slot = foundSlot;
     } else {
       const wh = workingHours[0] || { dayOfWeek: 1, startTime: '09:00', endTime: '17:00' };

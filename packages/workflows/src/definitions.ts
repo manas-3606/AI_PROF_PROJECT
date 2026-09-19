@@ -67,6 +67,7 @@ export async function processWorkflowJob(jobData: WorkflowJobData) {
                     questionnaireId: questionnaire.id,
                     doctorName: appt.doctor.name,
                     startTime: appt.startTime,
+                    correlationId: jobData.correlationId,
                   }),
                   status: 'Delivered',
                 },
@@ -85,6 +86,7 @@ export async function processWorkflowJob(jobData: WorkflowJobData) {
                   appointmentId: appt.id,
                   doctorName: appt.doctor.name,
                   startTime: appt.startTime.toISOString(),
+                  correlationId: jobData.correlationId,
                 },
                 condition: 'APPOINTMENT_NOT_CANCELLED',
                 correlationId: jobData.correlationId,
@@ -221,12 +223,15 @@ export async function processWorkflowJob(jobData: WorkflowJobData) {
       });
 
       // Exponential backoff retry
-      setTimeout(() => {
-        inProcessWorkflowEngine.dispatchJob({
-          ...jobData,
-          attemptCount: currentAttempt,
-        });
-      }, 1000 * Math.pow(2, currentAttempt));
+      if (process.env.NODE_ENV !== 'test') {
+        const timer = setTimeout(() => {
+          inProcessWorkflowEngine.dispatchJob({
+            ...jobData,
+            attemptCount: currentAttempt,
+          });
+        }, 1000 * Math.pow(2, currentAttempt));
+        timer.unref();
+      }
     } else {
       logger.error({ err, jobData }, `Workflow execution permanently failed after ${maxAttempts} attempts: ${jobData.workflowExecutionId}`);
       await prisma.workflowExecution.updateMany({

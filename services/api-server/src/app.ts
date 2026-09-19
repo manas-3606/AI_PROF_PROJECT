@@ -21,6 +21,21 @@ export async function buildApp(): Promise<FastifyInstance> {
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   });
 
+  // Handle empty JSON bodies gracefully without throwing FST_ERR_CTP_EMPTY_JSON_BODY
+  fastify.addContentTypeParser('application/json', { parseAs: 'string' }, (req, body: string, done) => {
+    try {
+      if (!body || !body.trim()) {
+        done(null, {});
+        return;
+      }
+      const json = JSON.parse(body);
+      done(null, json);
+    } catch (err: any) {
+      err.statusCode = 400;
+      done(err, undefined);
+    }
+  });
+
   // Request hook: extract correlation ID & auth token
   fastify.addHook('onRequest', async (request, reply) => {
     const correlationId =

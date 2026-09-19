@@ -154,7 +154,7 @@ export class HospitalOnboardingService {
    */
   static async startReview(hospitalId: string, actor: AuthUser, correlationId?: string) {
     const traceId = correlationId || crypto.randomUUID();
-    this.assertPlatformAdmin(actor, traceId, hospitalId, 'start review on hospital');
+    await this.assertPlatformAdmin(actor, traceId, hospitalId, 'start review on hospital');
 
     const hospital = await this.getHospitalOrThrow(hospitalId);
     if (hospital.status !== HospitalStatus.SUBMITTED) {
@@ -189,7 +189,7 @@ export class HospitalOnboardingService {
    */
   static async approveHospital(hospitalId: string, actor: AuthUser, notes?: string, correlationId?: string) {
     const traceId = correlationId || crypto.randomUUID();
-    this.assertPlatformAdmin(actor, traceId, hospitalId, 'approve hospital');
+    await this.assertPlatformAdmin(actor, traceId, hospitalId, 'approve hospital');
 
     const hospital = await this.getHospitalOrThrow(hospitalId);
     if (hospital.status !== HospitalStatus.SUBMITTED && hospital.status !== HospitalStatus.UNDER_REVIEW) {
@@ -227,7 +227,7 @@ export class HospitalOnboardingService {
    */
   static async rejectHospital(hospitalId: string, actor: AuthUser, reason: string, correlationId?: string) {
     const traceId = correlationId || crypto.randomUUID();
-    this.assertPlatformAdmin(actor, traceId, hospitalId, 'reject hospital');
+    await this.assertPlatformAdmin(actor, traceId, hospitalId, 'reject hospital');
 
     const hospital = await this.getHospitalOrThrow(hospitalId);
     if (hospital.status !== HospitalStatus.SUBMITTED && hospital.status !== HospitalStatus.UNDER_REVIEW) {
@@ -264,7 +264,7 @@ export class HospitalOnboardingService {
    */
   static async suspendHospital(hospitalId: string, actor: AuthUser, reason: string, correlationId?: string) {
     const traceId = correlationId || crypto.randomUUID();
-    this.assertPlatformAdmin(actor, traceId, hospitalId, 'suspend hospital');
+    await this.assertPlatformAdmin(actor, traceId, hospitalId, 'suspend hospital');
 
     const hospital = await this.getHospitalOrThrow(hospitalId);
     if (hospital.status !== HospitalStatus.APPROVED) {
@@ -299,7 +299,7 @@ export class HospitalOnboardingService {
    */
   static async reactivateHospital(hospitalId: string, actor: AuthUser, correlationId?: string) {
     const traceId = correlationId || crypto.randomUUID();
-    this.assertPlatformAdmin(actor, traceId, hospitalId, 'reactivate hospital');
+    await this.assertPlatformAdmin(actor, traceId, hospitalId, 'reactivate hospital');
 
     const hospital = await this.getHospitalOrThrow(hospitalId);
     if (hospital.status !== HospitalStatus.SUSPENDED) {
@@ -495,9 +495,9 @@ export class HospitalOnboardingService {
     return hospital;
   }
 
-  private static assertPlatformAdmin(actor: AuthUser, correlationId: string, hospitalId: string, action: string) {
+  private static async assertPlatformAdmin(actor: AuthUser, correlationId: string, hospitalId: string, action: string) {
     if (actor.role !== UserRole.PLATFORM_ADMIN) {
-      prisma.auditEvent.create({
+      await prisma.auditEvent.create({
         data: {
           correlationId,
           hospitalId,

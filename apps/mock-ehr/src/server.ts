@@ -7,7 +7,7 @@ const fastify = Fastify({ logger: true });
 // Chaos configuration state
 interface ChaosConfig {
   simulatedLatencyMs: number;
-  failureMode: 'NONE' | 'TIMEOUT' | '500_ERROR' | 'PHANTOM_CREATION';
+  failureMode: 'NONE' | 'TIMEOUT' | '500_ERROR' | 'ERROR_500' | 'PHANTOM_CREATION';
 }
 
 let chaosConfig: ChaosConfig = {
@@ -38,6 +38,11 @@ const ehrProviders = [
 
 const ehrPatients = [
   { id: 'EXT-PAT-DOE-99', name: 'John Doe', phone: '+1-555-0199', dob: '1988-04-12' },
+];
+
+const ehrFacilities = [
+  { id: 'EXT-FAC-APEX-01', name: 'Apex Health Center', address: '123 Medical Center Way' },
+  { id: 'EXT-FAC-METRO-02', name: 'Metro General Hospital', address: '456 Healthcare Blvd' },
 ];
 
 async function start() {
@@ -78,8 +83,48 @@ async function start() {
     return patient;
   });
 
-  fastify.get('/api/providers', async () => {
+  fastify.get('/api/providers', async (request) => {
+    const query = request.query as { id?: string; name?: string };
+    if (query.id) {
+      return ehrProviders.find((p) => p.id === query.id) || null;
+    }
+    if (query.name) {
+      const lower = query.name.toLowerCase();
+      return ehrProviders.find((p) => p.name.toLowerCase().includes(lower)) || null;
+    }
     return ehrProviders;
+  });
+
+  fastify.get('/api/facilities', async (request) => {
+    const query = request.query as { id?: string; name?: string };
+    if (query.id) {
+      return ehrFacilities.find((f) => f.id === query.id) || null;
+    }
+    if (query.name) {
+      const lower = query.name.toLowerCase();
+      return ehrFacilities.find((f) => f.name.toLowerCase().includes(lower)) || null;
+    }
+    return ehrFacilities;
+  });
+
+  fastify.get('/api/availability', async (request) => {
+    const query = request.query as { providerId?: string; startDate?: string; endDate?: string };
+    const providerId = query.providerId || 'EXT-DOC-RAO-01';
+    const baseDate = query.startDate ? new Date(query.startDate) : new Date();
+    // Return sample slots
+    const slots = [];
+    for (let i = 0; i < 3; i++) {
+      const start = new Date(baseDate);
+      start.setHours(9 + i * 2, 0, 0, 0);
+      const end = new Date(start);
+      end.setMinutes(start.getMinutes() + 30);
+      slots.push({
+        startTime: start.toISOString(),
+        endTime: end.toISOString(),
+        available: true,
+      });
+    }
+    return slots;
   });
 
   fastify.post('/api/appointments', async (request, reply) => {
@@ -98,7 +143,7 @@ async function start() {
     }
 
     // Evaluate Chaos failure modes
-    if (chaosConfig.failureMode === '500_ERROR') {
+    if (chaosConfig.failureMode === '500_ERROR' || chaosConfig.failureMode === 'ERROR_500') {
       return reply.status(500).send({
         error: 'EHR_INTERNAL_SERVER_ERROR',
         message: 'Simulated EHR downstream database unavailable',
@@ -169,13 +214,62 @@ async function start() {
     return reply.status(404).send({ error: 'No matching EHR record found' });
   });
 
+  fastify.put('/api/appointments/:id', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const appt = ehrAppointments.get(id);
+    if (!appt) return reply.status(404).send({ error: 'Appointment not found in EHR' });
+    const updates = request.body as Partial<EhrAppointment>;
+    const updated: EhrAppointment = { ...appt, ...updates };
+    ehrAppointments.set(id, updated);
+    return updated;
+  });
+
   fastify.delete('/api/appointments/:id', async (request, reply) => {
     const { id } = request.params as { id: string };
-    const existed = ehrAppointments.delete(id);
-    return { success: existed };
+
+    // Apply simulated latency if configured
+    if (chaosConfig.simulatedLatencyMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, chaosConfig.simulatedLatencyMs));
+    }
+
+    // Evaluate Chaos failure modes
+    if (chaosConfig.failureMode === '500_ERROR' || chaosConfig.failureMode === 'ERROR_500') {
+      return reply.status(500).send({
+        error: 'EHR_INTERNAL_SERVER_ERROR',
+        message: 'Simulated EHR downstream database unavailable during cancellation',
+      });
+    }
+
+    if (chaosConfig.failureMode === 'TIMEOUT') {
+      await new Promise((resolve) => setTimeout(resolve, 5500));
+      return reply.status(504).send({ error: 'GATEWAY_TIMEOUT' });
+    }
+
+    const appt = ehrAppointments.get(id);
+    if (!appt) {
+      return reply.status(404).send({ error: 'Appointment not found in EHR' });
+    }
+
+    appt.status = 'CANCELLED';
+    ehrAppointments.set(id, appt);
+    return { success: true, status: 'CANCELLED' };
   });
 
   const port = Number(process.env.MOCK_EHR_PORT || 4000);
+
+  const closeHandler = async (signal: string) => {
+    console.log(`Received ${signal}, closing Mock EHR Fastify gracefully...`);
+    try {
+      await fastify.close();
+    } catch (err) {
+      console.error('Error closing Mock EHR app:', err);
+    } finally {
+      process.exit(0);
+    }
+  };
+  process.once('SIGTERM', () => closeHandler('SIGTERM'));
+  process.once('SIGINT', () => closeHandler('SIGINT'));
+
   try {
     await fastify.listen({ port, host: '0.0.0.0' });
     console.log(`🏥 Mock EHR server listening at http://localhost:${port}`);

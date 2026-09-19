@@ -117,8 +117,75 @@ export class StubEhrConnector implements HealthcareConnector {
     return null;
   }
 
+  async lookupProvider(identifier: { externalProviderId?: string; name?: string }): Promise<{
+    externalProviderId: string;
+    name: string;
+    specialty: string;
+  } | null> {
+    if (this.shouldSimulateFailure) {
+      throw new Error(this.failureMessage);
+    }
+    return {
+      externalProviderId: identifier.externalProviderId || 'EXT-PROV-001',
+      name: identifier.name || 'Dr. Arvind Rao',
+      specialty: 'Orthopedics',
+    };
+  }
+
+  async lookupFacility(identifier: { externalFacilityId?: string; name?: string }): Promise<{
+    externalFacilityId: string;
+    name: string;
+    address?: string;
+  } | null> {
+    if (this.shouldSimulateFailure) {
+      throw new Error(this.failureMessage);
+    }
+    return {
+      externalFacilityId: identifier.externalFacilityId || 'EXT-FAC-001',
+      name: identifier.name || 'Apex Regional Medical Center',
+      address: '100 Medical Center Way',
+    };
+  }
+
+  async lookupAvailability(
+    externalProviderId: string,
+    startDate: string,
+    endDate: string
+  ): Promise<Array<{ startTime: string; endTime: string; available: boolean }>> {
+    if (this.shouldSimulateFailure) {
+      throw new Error(this.failureMessage);
+    }
+    return [
+      {
+        startTime: new Date(Date.now() + 86400000).toISOString(),
+        endTime: new Date(Date.now() + 86400000 + 1800000).toISOString(),
+        available: true,
+      },
+    ];
+  }
+
+  async updateAppointment(externalAppointmentId: string, updates: Partial<ExternalAppointmentPayload>): Promise<ExternalAppointmentResult> {
+    if (this.shouldSimulateFailure) {
+      throw new Error(this.failureMessage);
+    }
+    const appt = this.appointments.get(externalAppointmentId);
+    const updated: ExternalAppointmentResult = {
+      externalAppointmentId,
+      status: 'CONFIRMED',
+      verified: true,
+      createdAt: appt?.createdAt || new Date().toISOString(),
+    };
+    this.appointments.set(externalAppointmentId, updated);
+    return updated;
+  }
+
+  async retrieveAppointment(externalAppointmentId: string): Promise<ExternalAppointmentResult | null> {
+    return this.getAppointment(externalAppointmentId);
+  }
+
   clear(): void {
     this.appointments.clear();
     this.shouldSimulateFailure = false;
   }
 }
+

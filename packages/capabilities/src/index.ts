@@ -5,3 +5,4 @@ export * from './stub-connector.js';
 export * from './context-manager.js';
 export * from './registry.js';
 export * from './patient-agent.js';
+export * from './llm-router.js';

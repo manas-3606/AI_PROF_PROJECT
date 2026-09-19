@@ -1,16 +1,31 @@
 const API_BASE = 'http://localhost:3001/api';
 
 export class ApiService {
-  private static token: string | null = null;
+  private static token: string | null = typeof window !== 'undefined' ? localStorage.getItem('ai_prof_token') : null;
 
   static setToken(token: string | null) {
     this.token = token;
+    if (typeof window !== 'undefined') {
+      if (token) {
+        localStorage.setItem('ai_prof_token', token);
+      } else {
+        localStorage.removeItem('ai_prof_token');
+      }
+    }
+  }
+
+  static getToken(): string | null {
+    if (!this.token && typeof window !== 'undefined') {
+      this.token = localStorage.getItem('ai_prof_token');
+    }
+    return this.token;
   }
 
   private static getHeaders(): HeadersInit {
+    const token = this.getToken();
     return {
       'Content-Type': 'application/json',
-      ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
     };
   }
 
@@ -20,10 +35,33 @@ export class ApiService {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password }),
     });
-    if (!res.ok) throw new Error('Login failed');
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Invalid email or password');
+    }
     const data = await res.json();
     this.setToken(data.token);
+    if (data.user && typeof window !== 'undefined') {
+      localStorage.setItem('ai_prof_user', JSON.stringify(data.user));
+    }
     return data;
+  }
+
+  static logout() {
+    this.setToken(null);
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem('ai_prof_user');
+    }
+  }
+
+  static getCurrentUser(): any {
+    try {
+      if (typeof window === 'undefined') return null;
+      const raw = localStorage.getItem('ai_prof_user');
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
   }
 
   static async getHospitals(status?: string) {
@@ -163,6 +201,7 @@ export class ApiService {
     const res = await fetch(`${API_BASE}/chaos/reset`, {
       method: 'POST',
       headers: this.getHeaders(),
+      body: JSON.stringify({}),
     });
     return await res.json();
   }

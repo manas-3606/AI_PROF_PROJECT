@@ -464,6 +464,9 @@ export const analyticsRoutes: FastifyPluginAsync = async (fastify) => {
     const query = request.query as { hospitalId?: string };
 
     let targetHospitalId = query.hospitalId;
+    if (targetHospitalId === 'undefined' || targetHospitalId === 'null') {
+      targetHospitalId = undefined;
+    }
 
     if (user) {
       if (user.role === 'HOSPITAL_ADMIN') {
@@ -590,18 +593,22 @@ export const analyticsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.status(404).send({ error: 'Doctor not found' });
     }
 
+    const doctor = await prisma.doctor.findUnique({
+      where: { id: targetDoctorId },
+      include: { hospital: true, calendar: true },
+    });
+
+    if (!doctor) {
+      return reply.status(404).send({ error: 'Doctor not found' });
+    }
+
     const [
-      doctor,
       appointments,
       slots,
       calendar,
       questionnaireResponses,
       applicableQuestionnaires,
     ] = await Promise.all([
-      prisma.doctor.findUnique({
-        where: { id: targetDoctorId },
-        include: { hospital: true, calendar: true },
-      }),
       prisma.appointment.findMany({
         where: { doctorId: targetDoctorId },
         include: {
@@ -629,12 +636,20 @@ export const analyticsRoutes: FastifyPluginAsync = async (fastify) => {
         where: {
           OR: [
             { doctorId: targetDoctorId },
-            { specialty: 'Orthopedics' },
+            { hospitalId: doctor.hospitalId },
+            { specialty: doctor.specialty },
           ],
         },
         include: { questions: true },
       }),
     ]);
+
+    const questionTextMap: Record<string, string> = {};
+    for (const q of applicableQuestionnaires) {
+      for (const question of q.questions) {
+        questionTextMap[question.id] = question.text;
+      }
+    }
 
     return {
       doctor,
@@ -644,6 +659,7 @@ export const analyticsRoutes: FastifyPluginAsync = async (fastify) => {
       blockedTime: calendar?.blockedSlots || [],
       preVisitResponses: questionnaireResponses,
       questionnaires: applicableQuestionnaires,
+      questionTextMap,
     };
   });
 

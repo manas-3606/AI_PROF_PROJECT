@@ -48,6 +48,45 @@ export const doctorRoutes: FastifyPluginAsync = async (fastify) => {
     }));
   });
 
+  // 1b. Invite doctor (PRD Section 6 Lifecycle: starts in INVITED status)
+  fastify.post('/invite', async (request, reply) => {
+    const body = request.body as any;
+    const user = (request as any).user;
+    const correlationId = (request.headers['x-correlation-id'] as string) || crypto.randomUUID();
+
+    if (!user) {
+      return reply.status(401).send({ error: 'Authentication required' });
+    }
+
+    if (user.role === UserRole.HOSPITAL_ADMIN && user.tenantId && user.tenantId !== body.hospitalId) {
+      return reply.status(403).send({ error: 'Cross-tenant access forbidden' });
+    }
+
+    if (user.role !== UserRole.PLATFORM_ADMIN && user.role !== UserRole.HOSPITAL_ADMIN) {
+      return reply.status(403).send({ error: 'Forbidden: Insufficient privileges' });
+    }
+
+    try {
+      const result = await HospitalDoctorConfigService.inviteDoctor(
+        body.hospitalId,
+        {
+          name: body.name,
+          email: body.email,
+          specialty: body.specialty,
+          department: body.department,
+          qualifications: body.qualifications,
+          appointmentDurationMinutes: body.appointmentDurationMinutes,
+          initialStatus: DoctorStatus.INVITED,
+        },
+        user,
+        correlationId
+      );
+      return reply.status(201).send(result.doctor);
+    } catch (err: any) {
+      return reply.status(400).send({ error: err.message });
+    }
+  });
+
   // 2. Create doctor (Gated by Hospital APPROVED status and Tenant Isolation)
   fastify.post('/', async (request, reply) => {
     const body = request.body as any;

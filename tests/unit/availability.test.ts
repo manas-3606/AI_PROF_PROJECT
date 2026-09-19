@@ -215,6 +215,7 @@ describe('Unit Test: Slot Availability & No Invented Slots (PRD Section 7)', () 
       const slotEndTime = new Date(slotStartTime);
       slotEndTime.setMinutes(slotStartTime.getMinutes() + 30);
 
+      await prisma.slot.deleteMany({ where: { doctorId: testDoctor.id, startTime: slotStartTime } });
       const testSlot = await prisma.slot.create({
         data: {
           doctorId: testDoctor.id,
@@ -262,6 +263,8 @@ describe('Unit Test: Slot Availability & No Invented Slots (PRD Section 7)', () 
 
       const slotEndTime = new Date(slotStartTime);
       slotEndTime.setMinutes(slotStartTime.getMinutes() + 30);
+
+      await prisma.slot.deleteMany({ where: { doctorId: testDoctor.id, startTime: slotStartTime } });
 
       const bookedSlot = await prisma.slot.create({
         data: {

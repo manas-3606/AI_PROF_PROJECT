@@ -1,4 +1,4 @@
-import { describe, it, before } from 'node:test';
+import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
 import { prisma } from '@health/db';
 import { HospitalOnboardingService, AuthService } from '@health/core-services';
@@ -263,6 +263,21 @@ describe('Integration Test: Hospital Onboarding & Approval Lifecycle (PRD Sectio
       // Reactivate
       const reactivated = await HospitalOnboardingService.reactivateHospital(testHospitalId, platformAdmin);
       assert.strictEqual(reactivated.status, HospitalStatus.APPROVED);
+    });
+
+    after(async () => {
+      if (testHospitalId) {
+        await prisma.appointment.deleteMany({ where: { hospitalId: testHospitalId } });
+        await prisma.slot.deleteMany({ where: { hospitalId: testHospitalId } });
+        await prisma.workingHour.deleteMany({ where: { hospitalId: testHospitalId } });
+        await prisma.calendar.deleteMany({ where: { hospitalId: testHospitalId } });
+        await prisma.doctor.deleteMany({ where: { hospitalId: testHospitalId } });
+        await prisma.department.deleteMany({ where: { hospitalId: testHospitalId } });
+        await prisma.healthcareSystemConnection.deleteMany({ where: { hospitalId: testHospitalId } });
+        await prisma.auditEvent.deleteMany({ where: { hospitalId: testHospitalId } });
+        await prisma.user.deleteMany({ where: { hospitalId: testHospitalId } });
+        await prisma.hospital.deleteMany({ where: { id: testHospitalId } });
+      }
     });
   });
 });

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { ApiService } from '../services/api.js';
 import { Appointment, Questionnaire } from '../types.js';
 import {
@@ -16,9 +16,9 @@ export const PatientPortal: React.FC = () => {
   const [activeAppointmentForQ, setActiveAppointmentForQ] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const loadData = async () => {
+  const loadData = useCallback(async (isBackground = false) => {
     try {
-      setLoading(true);
+      if (!isBackground) setLoading(true);
       const [dash, qData] = await Promise.all([
         ApiService.getPatientDashboard(),
         ApiService.getQuestionnaires(),
@@ -28,15 +28,15 @@ export const PatientPortal: React.FC = () => {
     } catch (e) {
       console.error('Failed to load patient dashboard:', e);
     } finally {
-      setLoading(false);
+      if (!isBackground) setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    loadData();
-    const interval = setInterval(loadData, 8000);
+    loadData(false);
+    const interval = setInterval(() => loadData(true), 15000);
     return () => clearInterval(interval);
-  }, []);
+  }, [loadData]);
 
   const patient = dashboardData?.patient;
   const appointments: Appointment[] = dashboardData?.appointments || [];
@@ -70,9 +70,9 @@ export const PatientPortal: React.FC = () => {
   };
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+    <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
       {/* Left Column: Embedded Real-Time Voice + Chat Assistant (PRD Phase A) */}
-      <div className="lg:col-span-5 flex flex-col h-[740px]">
+      <div className="lg:col-span-5 flex flex-col sticky top-4 self-start z-10">
         <VoiceHud onAppointmentBooked={loadData} />
       </div>
 

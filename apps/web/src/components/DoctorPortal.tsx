@@ -44,6 +44,22 @@ export const DoctorPortal: React.FC = () => {
   const availability = dashboardData?.availability || [];
   const blockedTime = dashboardData?.blockedTime || [];
   const preVisitResponses = dashboardData?.preVisitResponses || [];
+  const questionTextMap = dashboardData?.questionTextMap || {};
+
+  const getQuestionLabel = (key: string, questionnaire?: any) => {
+    if (questionTextMap[key]) return questionTextMap[key];
+    if (questionnaire?.questions) {
+      const found = questionnaire.questions.find((q: any) => q.id === key);
+      if (found?.text) return found.text;
+    }
+    return key;
+  };
+
+  const formatAnswerValue = (val: any) => {
+    if (typeof val === 'boolean') return val ? 'Yes' : 'No';
+    if (val === null || val === undefined || val === '') return 'N/A';
+    return String(val);
+  };
 
   return (
     <div className="space-y-6">
@@ -214,11 +230,11 @@ export const DoctorPortal: React.FC = () => {
                               <span>Flagged: {r.flaggedReason}</span>
                             </div>
                           )}
-                          <div className="space-y-1 pt-1">
+                          <div className="space-y-1.5 pt-1">
                             {Object.entries(answers).map(([k, v]) => (
-                              <div key={k} className="flex justify-between text-[11px]">
-                                <span className="text-slate-400">{k}:</span>
-                                <span className="text-white font-medium">{String(v)}</span>
+                              <div key={k} className="flex justify-between items-start text-[11px] gap-2">
+                                <span className="text-slate-400 font-medium text-left">{getQuestionLabel(k, r.questionnaire)}:</span>
+                                <span className="text-white font-semibold text-right shrink-0">{formatAnswerValue(v)}</span>
                               </div>
                             ))}
                           </div>
@@ -337,11 +353,11 @@ export const DoctorPortal: React.FC = () => {
                       </span>
                     )}
                   </div>
-                  <div className="p-3 bg-slate-950 rounded-lg border border-slate-800/80 space-y-1">
+                  <div className="p-3 bg-slate-950 rounded-lg border border-slate-800/80 space-y-1.5">
                     {Object.entries(answers).map(([k, v]) => (
-                      <div key={k} className="flex justify-between text-[11px]">
-                        <span className="text-slate-400">{k}:</span>
-                        <span className="text-white font-medium">{String(v)}</span>
+                      <div key={k} className="flex justify-between items-start text-[11px] gap-2">
+                        <span className="text-slate-400 font-medium text-left">{getQuestionLabel(k, r.questionnaire)}:</span>
+                        <span className="text-white font-semibold text-right shrink-0">{formatAnswerValue(v)}</span>
                       </div>
                     ))}
                   </div>

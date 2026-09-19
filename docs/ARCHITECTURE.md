@@ -18,6 +18,12 @@ Fastify with TypeScript delivers industry-leading HTTP/WebSocket throughput, nea
 ### Database: PostgreSQL 16 with Prisma ORM
 PostgreSQL is the gold standard for relational healthcare data requiring uncompromising ACID compliance, relational integrity, and cross-table foreign key constraints to enforce strict tenant isolation (`tenant_id` scoping). Most importantly, PostgreSQL provides row-level locking primitives (`SELECT ... FOR UPDATE`), which are essential to prevent concurrent double-booking of doctor slots during high-traffic intake windows. Prisma ORM guarantees end-to-end type safety, automated migration management, and native JSONB column querying for dynamic questionnaire definitions and conversation context snapshots.
 
+> [!NOTE]
+> **Local / Prototype vs. Production Configuration:**  
+> - **Local Development & Testing:** The active local environment is configured with **zero-config SQLite** (`file:./dev.db`) to enable completely friction-free local development and fast test execution without requiring external database server daemons.  
+> - **Production Target (Phase D):** The target production deployment architecture is **PostgreSQL 16**.  
+> - **Verification Clarification:** Postgres row-level locking primitives (`SELECT ... FOR UPDATE`) have been designed and coded for in the scheduling and transaction layers, but have **not been independently verified against a live Postgres instance in this local environment**, because Docker and PostgreSQL are not installed or available on this host. Local concurrency validation runs against SQLite transactions (`prisma.$transaction`).
+
 ### Authentication & Authorization: JWT Session Auth with Tenant-Scoped RBAC
 To eliminate the external network dependencies, setup friction, and OAuth redirect latency inherent in third-party identity providers during a 3-day prototype, we implement a robust, self-contained JWT authentication service using industry-standard cryptography (`jose` / `bcrypt`). Every issued token embeds cryptographically verified claims: `userId`, `role` (`PLATFORM_ADMIN`, `HOSPITAL_ADMIN`, `DOCTOR`, `PATIENT`), and `tenantId` (for hospital-scoped users). Fastify pre-handler hooks enforce role-based access control and automatically scope all downstream database queries to the requesting tenant, preventing cross-tenant data leaks.
 
@@ -29,6 +35,12 @@ Vite with React delivers instantaneous Hot Module Replacement (HMR), minimal bun
 
 ### Job / Queue System for Workflows: BullMQ with Redis
 BullMQ running on Redis provides an enterprise-grade, memory-efficient background job and scheduling queue that directly supports our asynchronous healthcare workflows. It provides first-class support for delayed jobs (e.g., dispatching pre-visit questionnaires and 24-hour appointment reminders), automatic exponential backoff retries (e.g., during transient EHR network blips), job deduplication via deterministic idempotency keys, execution state tracking, and Dead Letter Queues (DLQs) for failed synchronizations requiring human operator escalation.
+
+> [!NOTE]
+> **Local / Prototype vs. Production Configuration:**  
+> - **Local Development & Testing:** When `REDIS_URL` is empty, the platform seamlessly defaults to an **in-process memory queue** (`InProcessWorkflowEngine` in `packages/workflows/src/queue.ts`) for zero-dependency local execution.  
+> - **Production Target (Phase D):** The target production deployment architecture is **BullMQ backed by Redis 7+**.  
+> - **Verification Clarification:** Redis-backed BullMQ retry backoff, exponential delays, and Dead Letter Queue (DLQ) escalation behaviors have been fully designed and coded into `WorkflowQueueManager`, but have **not been independently verified against a live Redis instance in this local environment**, because Docker and Redis are not installed or available on this host.
 
 ---
 

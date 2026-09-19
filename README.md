@@ -44,16 +44,39 @@ Autonomous multi-hospital patient intake, real-time voice scheduling, EHR synchr
 
 ---
 
-## 4. Seeded Demo Accounts & Credentials
+## 4. Seeded Multi-Tenant Demo Directory & Credentials
 
-The platform is pre-seeded with four primary operational roles across multi-hospital tenants. All accounts share the demo password: `Password123!`
+The platform is pre-seeded with multi-tenant demo accounts spanning 3 approved hospital systems, 6 physicians, 6 patients, 3 hospital administrators, and 1 platform administrator.
 
-| Role | Email | Password | Tenant / Hospital Scope | Dashboard URL |
-| :--- | :--- | :--- | :--- | :--- |
-| **Platform Admin** | `platform.admin@health.org` | `Password123!` | System-wide (All Hospitals) | `/dashboards/platform-admin` |
-| **Hospital Admin** | `admin@apexhealth.org` | `Password123!` | Apex Regional Medical Center | `/dashboards/hospital-admin` |
-| **Doctor** | `dr.rao@apexhealth.org` | `Password123!` | Dr. Arvind Rao (Orthopedics) | `/dashboards/doctor` |
-| **Patient** | `jane.doe@example.com` | `Password123!` | Jane Doe | `/dashboards/patient` |
+> **Global Demo Password:** Every demo account uses the unified password: **`Password123!`**
+
+### 🏢 Multi-Tenant Health Systems (Approved)
+1. **Apex Regional Medical Center** (`apex-regional`) — Orthopedics & Cardiology
+2. **Metropolitan Health System** (`metropolitan-health`) — Cardiology & General Medicine
+3. **Riverside Community Hospital** (`riverside-community`) — Orthopedics & General Medicine
+
+---
+
+### 🔑 Unified Account Directory
+
+| Role | Name | Email | Password | Facility / Tenant Scope | Key Specialty / Notes |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Platform Admin** | Platform Administrator | `platform.admin@health.org` | `Password123!` | System-wide (All Hospitals) | System Governance & Reconciliation |
+| **Hospital Admin** | Apex Hospital Admin | `admin@apexhealth.org` | `Password123!` | Apex Regional Medical Center | Orthopedics & Cardiology Ops |
+| **Hospital Admin** | Metro Hospital Admin | `admin@metrohealth.org` | `Password123!` | Metropolitan Health System | Cardiovascular & Internal Med Ops |
+| **Hospital Admin** | Riverside Hospital Admin | `admin@riversidehealth.org` | `Password123!` | Riverside Community Hospital | Community Clinic & Joint Recon Ops |
+| **Doctor** | Dr. Arvind Rao | `dr.rao@apexhealth.org` | `Password123!` | Apex Regional Medical Center | Orthopedic Surgery (Active Slots) |
+| **Doctor** | Dr. Maya Patel | `dr.patel@apexhealth.org` | `Password123!` | Apex Regional Medical Center | Interventional Cardiology (Active Slots) |
+| **Doctor** | Dr. Marcus Chen | `dr.chen@metrohealth.org` | `Password123!` | Metropolitan Health System | Cardiology / Electrophysiology (Active Slots) |
+| **Doctor** | Dr. Elena Jenkins | `dr.jenkins@metrohealth.org` | `Password123!` | Metropolitan Health System | General Internal Medicine (Active Slots) |
+| **Doctor** | Dr. Anya Rostova | `dr.rostova@riversidehealth.org` | `Password123!` | Riverside Community Hospital | Orthopedic Sports Medicine (Active Slots) |
+| **Doctor** | Dr. David Kim | `dr.kim@riversidehealth.org` | `Password123!` | Riverside Community Hospital | General Family Medicine (Active Slots) |
+| **Patient** | Jane Doe | `jane.doe@example.com` | `Password123!` | Apex Regional Medical Center | Upcoming appt (Dr. Rao), intake submitted |
+| **Patient** | John Doe | `patient.john@example.com` | `Password123!` | Apex Regional Medical Center | Past completed consultation (Dr. Patel) |
+| **Patient** | Robert Taylor | `robert.taylor@example.com` | `Password123!` | Metropolitan Health System | Upcoming consultation (Dr. Chen) |
+| **Patient** | Emily Watson | `emily.watson@example.com` | `Password123!` | Metropolitan Health System | Past completed wellness check (Dr. Jenkins) |
+| **Patient** | Michael Chang | `michael.chang@example.com` | `Password123!` | Riverside Community Hospital | Upcoming knee follow-up (Dr. Rostova) |
+| **Patient** | Sophia Martinez | `sophia.martinez@example.com` | `Password123!` | Riverside Community Hospital | Past completed visit (Dr. Kim) |
 
 ---
 
@@ -84,6 +107,7 @@ Copy `.env.example` to `.env`. The default settings enable zero-config local exe
 ### 1. Prerequisites
 - **Node.js**: v20+ or v22+
 - **pnpm**: v9+ or v10+ (`npm install -g pnpm`)
+> **Zero-Docker Local Setup:** Local development is genuinely zero-Docker. Neither Docker, external PostgreSQL, nor Redis is required to run or test the full stack locally; the environment runs on embedded SQLite (`file:./dev.db`) and an in-process asynchronous workflow queue. `docker-compose.yml` is maintained solely for the target PostgreSQL 16 + Redis 7 production/staging deployment profile.
 
 ### 2. Installation & Database Migration
 ```bash
@@ -103,11 +127,12 @@ pnpm db:push
 pnpm db:seed
 ```
 
-### 3. Start Development Services
-Run all microservices concurrently via Turborepo:
+### 3. Start Full Development Stack (Single Command)
+Run all 4 services and the background workflow runner concurrently via Turborepo:
 ```bash
 pnpm dev
 ```
+*This single command starts: API Server (3001), Voice Gateway (3002), Mock EHR (4000), Vite Web App (5173), and the in-process Workflow Worker.*
 
 Or start individual components in dedicated terminals:
 ```bash
