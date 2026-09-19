@@ -292,7 +292,7 @@ export const VoiceHud: React.FC<VoiceHudProps> = ({ onAppointmentBooked }) => {
           ...prev,
           {
             sender: 'system',
-            text: 'Voice gateway is connecting. Please ensure the voice-gateway service is running on port 3002.',
+            text: 'Voice gateway is connecting. Please ensure the voice-gateway service is running and reachable.',
           },
         ]);
         setVoiceState('idle');
@@ -478,7 +478,7 @@ export const VoiceHud: React.FC<VoiceHudProps> = ({ onAppointmentBooked }) => {
     window.speechSynthesis.speak(utterance);
   }, [sendLifecycleEvent]);
 
-  // Connect WebSocket to Port 3002 with Heartbeat & Error recovery
+  // Connect WebSocket to Voice Gateway with Heartbeat & Error recovery
   const connectWebSocket = useCallback(() => {
     try {
       if (
@@ -499,8 +499,25 @@ export const VoiceHud: React.FC<VoiceHudProps> = ({ onAppointmentBooked }) => {
       if (hospitalId) queryParams.set('hospitalId', hospitalId);
 
       const qs = queryParams.toString();
-      const rawWs = (import.meta.env.VITE_VOICE_GATEWAY_WS_URL || 'ws://localhost:3002').replace(/\/$/, '');
-      const wsEndpoint = rawWs.endsWith('/ws/voice') ? rawWs : `${rawWs}/ws/voice`;
+      const configuredWs = import.meta.env.VITE_VOICE_GATEWAY_WS_URL?.trim();
+      let baseWs =
+        configuredWs ||
+        (import.meta.env.PROD
+          ? 'wss://ai-prof-voice-gateway.onrender.com/ws/voice'
+          : 'ws://localhost:3002/ws/voice');
+
+      // Automatically convert http/https protocol to ws/wss if provided
+      if (baseWs.startsWith('https://')) {
+        baseWs = 'wss://' + baseWs.slice(8);
+      } else if (baseWs.startsWith('http://')) {
+        baseWs = 'ws://' + baseWs.slice(7);
+      }
+
+      // Remove trailing slashes
+      baseWs = baseWs.replace(/\/+$/, '');
+
+      // Ensure /ws/voice endpoint is present without duplicating it
+      const wsEndpoint = baseWs.endsWith('/ws/voice') ? baseWs : `${baseWs}/ws/voice`;
       const wsUrl = qs ? `${wsEndpoint}?${qs}` : wsEndpoint;
 
       const ws = new WebSocket(wsUrl);
