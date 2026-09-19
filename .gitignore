@@ -11,6 +11,7 @@ out/
 
 # Environment & Secret Files
 .env
+.env.*
 .env.local
 .env.*.local
 !.env.example

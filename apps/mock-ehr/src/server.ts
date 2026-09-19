@@ -49,7 +49,7 @@ async function start() {
   await fastify.register(cors, { origin: '*' });
 
   // Health Check
-  fastify.get('/health', async () => ({ status: 'UP', service: 'mock-ehr' }));
+  fastify.get('/health', async () => ({ status: 'ok', service: 'mock-ehr' }));
 
   // 1. Chaos Configuration Endpoints
   fastify.get('/chaos/status', async () => {
@@ -255,7 +255,7 @@ async function start() {
     return { success: true, status: 'CANCELLED' };
   });
 
-  const port = Number(process.env.MOCK_EHR_PORT || 4000);
+  const port = Number(process.env.PORT || process.env.MOCK_EHR_PORT || 4000);
 
   const closeHandler = async (signal: string) => {
     console.log(`Received ${signal}, closing Mock EHR Fastify gracefully...`);
@@ -272,7 +272,7 @@ async function start() {
 
   try {
     await fastify.listen({ port, host: '0.0.0.0' });
-    console.log(`🏥 Mock EHR server listening at http://localhost:${port}`);
+    console.log(`🏥 Mock EHR server listening on port ${port} (host: 0.0.0.0)`);
   } catch (err) {
     fastify.log.error(err);
     process.exit(1);

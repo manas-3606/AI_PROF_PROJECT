@@ -16,8 +16,26 @@ import crypto from 'node:crypto';
 export async function buildApp(): Promise<FastifyInstance> {
   const fastify = Fastify({ logger: false });
 
+  const allowedOrigins = process.env.FRONTEND_URL
+    ? process.env.FRONTEND_URL.split(',').map((u) => u.trim().replace(/\/$/, ''))
+    : ['http://localhost:5173'];
+
   await fastify.register(cors, {
-    origin: true,
+    origin: (origin, cb) => {
+      // Allow non-browser requests (Postman, server-to-server, curl)
+      if (!origin) return cb(null, true);
+
+      const normalizedOrigin = origin.replace(/\/$/, '');
+      if (
+        allowedOrigins.includes(normalizedOrigin) ||
+        allowedOrigins.includes('*') ||
+        (process.env.NODE_ENV !== 'production' && normalizedOrigin.includes('localhost'))
+      ) {
+        return cb(null, true);
+      }
+      return cb(null, false);
+    },
+    credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   });
 
@@ -55,7 +73,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   });
 
   // Health check
-  fastify.get('/health', async () => ({ status: 'UP', service: 'api-server' }));
+  fastify.get('/health', async () => ({ status: 'ok', service: 'api-server' }));
 
   // Register Routes
   await fastify.register(authRoutes, { prefix: '/api/auth' });

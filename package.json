@@ -9,7 +9,10 @@
     "lint": "turbo run lint",
     "db:generate": "pnpm --filter @health/db run generate",
     "db:push": "pnpm --filter @health/db run push",
-    "db:seed": "pnpm --filter @health/db run seed"
+    "db:seed": "pnpm --filter @health/db run seed",
+    "db:generate:sqlite": "pnpm --filter @health/db run generate:sqlite",
+    "db:push:sqlite": "pnpm --filter @health/db run push:sqlite",
+    "db:seed:sqlite": "pnpm --filter @health/db run seed:sqlite"
   },
   "devDependencies": {
     "@types/node": "^22.13.4",

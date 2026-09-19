@@ -1122,11 +1122,12 @@ async function main() {
   ];
 
   for (const h of hospitals) {
+    const ehrBaseUrl = process.env.MOCK_EHR_URL || `http://localhost:${h.port}`;
     await prisma.healthcareSystemConnection.create({
       data: {
         hospitalId: h.hosp.id,
         systemType: 'MOCK_EHR',
-        baseUrl: `http://localhost:${h.port}`,
+        baseUrl: ehrBaseUrl,
         status: 'ACTIVE',
         configJson: JSON.stringify({
           vendor: h.vendor,

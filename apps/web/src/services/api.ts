@@ -1,4 +1,5 @@
-const API_BASE = 'http://localhost:3001/api';
+const rawBase = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001/api').replace(/\/$/, '');
+const API_BASE = rawBase.endsWith('/api') ? rawBase : `${rawBase}/api`;
 
 export class ApiService {
   private static token: string | null = typeof window !== 'undefined' ? localStorage.getItem('ai_prof_token') : null;

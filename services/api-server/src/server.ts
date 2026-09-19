@@ -2,7 +2,7 @@ import { buildApp } from './app.js';
 
 async function main() {
   const app = await buildApp();
-  const port = Number(process.env.API_PORT || 3001);
+  const port = Number(process.env.PORT || process.env.API_PORT || 3001);
 
   const closeHandler = async (signal: string) => {
     console.log(`Received ${signal}, closing Fastify gracefully...`);
@@ -20,7 +20,7 @@ async function main() {
 
   try {
     await app.listen({ port, host: '0.0.0.0' });
-    console.log(`🚀 API Server running at http://localhost:${port}`);
+    console.log(`🚀 API Server running on port ${port} (host: 0.0.0.0)`);
   } catch (err: any) {
     app.log.error(err);
     process.exit(1);

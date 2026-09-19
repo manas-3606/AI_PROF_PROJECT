@@ -16,7 +16,7 @@ async function start() {
   await fastify.register(websocket);
 
   // Health check
-  fastify.get('/health', async () => ({ status: 'UP', service: 'voice-gateway' }));
+  fastify.get('/health', async () => ({ status: 'ok', service: 'voice-gateway' }));
 
   // WebSocket for Real-Time Web Voice HUD
   fastify.register(async function (fastify) {
@@ -420,10 +420,10 @@ async function start() {
     return reply.type('text/xml').send(twiml);
   });
 
-  const port = Number(process.env.VOICE_GATEWAY_PORT || 3002);
+  const port = Number(process.env.PORT || process.env.VOICE_GATEWAY_PORT || 3002);
   try {
     await fastify.listen({ port, host: '0.0.0.0' });
-    console.log(`🎙️ Voice Gateway listening at http://localhost:${port}`);
+    console.log(`🎙️ Voice Gateway listening on port ${port} (host: 0.0.0.0)`);
   } catch (err) {
     fastify.log.error(err);
     process.exit(1);

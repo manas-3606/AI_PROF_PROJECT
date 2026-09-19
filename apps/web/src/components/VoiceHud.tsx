@@ -499,7 +499,9 @@ export const VoiceHud: React.FC<VoiceHudProps> = ({ onAppointmentBooked }) => {
       if (hospitalId) queryParams.set('hospitalId', hospitalId);
 
       const qs = queryParams.toString();
-      const wsUrl = qs ? `ws://localhost:3002/ws/voice?${qs}` : 'ws://localhost:3002/ws/voice';
+      const rawWs = (import.meta.env.VITE_VOICE_GATEWAY_WS_URL || 'ws://localhost:3002').replace(/\/$/, '');
+      const wsEndpoint = rawWs.endsWith('/ws/voice') ? rawWs : `${rawWs}/ws/voice`;
+      const wsUrl = qs ? `${wsEndpoint}?${qs}` : wsEndpoint;
 
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
