@@ -4,6 +4,9 @@ import {
   PatientAccessAgent,
   ConversationContextManager,
   loadSystemPrompt,
+  getGeminiConfigStatus,
+  testLiveGeminiConnection,
+  recentLlmLogs,
 } from '@health/capabilities';
 import crypto from 'node:crypto';
 
@@ -50,6 +53,8 @@ export async function chatRoutes(fastify: FastifyInstance) {
       correlationId,
     });
 
+    const matchingLog = recentLlmLogs.find((l) => l.correlationId === correlationId) || recentLlmLogs[0];
+
     return reply.status(200).send({
       conversationId,
       correlationId,
@@ -62,6 +67,37 @@ export async function chatRoutes(fastify: FastifyInstance) {
       clarificationNeeded: result.clarificationNeeded || false,
       transferredToHuman: result.transferredToHuman || false,
       context: result.context,
+      routeSource: matchingLog?.source || 'UNKNOWN',
+      rawLog: matchingLog?.rawLog || 'No raw log captured',
+    });
+  });
+
+  /**
+   * GET /api/chat/debug-live-env
+   * Live deployed process environment verification and end-to-end Gemini test call.
+   */
+  fastify.get('/debug-live-env', async (_req: FastifyRequest, reply: FastifyReply) => {
+    const configStatus = getGeminiConfigStatus();
+    const liveTest = await testLiveGeminiConnection();
+
+    return reply.status(200).send({
+      timestamp: new Date().toISOString(),
+      service: 'api-server',
+      environment: process.env.NODE_ENV || 'production',
+      geminiConfig: configStatus,
+      liveGeminiTest: liveTest,
+    });
+  });
+
+  /**
+   * GET /api/chat/debug-live-logs
+   * Return recent in-memory LLM routing execution logs with raw log lines.
+   */
+  fastify.get('/debug-live-logs', async (_req: FastifyRequest, reply: FastifyReply) => {
+    return reply.status(200).send({
+      timestamp: new Date().toISOString(),
+      totalLogs: recentLlmLogs.length,
+      logs: recentLlmLogs,
     });
   });
 

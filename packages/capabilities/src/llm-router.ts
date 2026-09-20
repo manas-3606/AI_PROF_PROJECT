@@ -89,6 +89,82 @@ function getClient(): GoogleGenAI | null {
   return geminiClient;
 }
 
+export interface LlmLogEntry {
+  timestamp: string;
+  correlationId?: string;
+  source: 'GEMINI_LLM' | 'TIER3_DETERMINISTIC_FALLBACK';
+  status: 'SUCCESS' | 'FAILED' | 'SKIPPED';
+  utterance: string;
+  intent?: string;
+  confidence?: string;
+  latencyMs: number;
+  rawLog: string;
+  error?: string;
+}
+
+export const recentLlmLogs: LlmLogEntry[] = [];
+export function recordLlmLog(entry: LlmLogEntry) {
+  recentLlmLogs.unshift(entry);
+  if (recentLlmLogs.length > 50) {
+    recentLlmLogs.length = 50;
+  }
+}
+
+export function getGeminiConfigStatus() {
+  const key = getGeminiApiKey();
+  const isConfigured = !!key;
+  const isPlaceholder = !key || key === 'your-gemini-api-key-here' || key.includes('placeholder');
+  const keyLength = key ? key.length : 0;
+  const keyPrefix = key ? `${key.slice(0, 6)}...${key.slice(-4)}` : 'none';
+  return {
+    isConfigured,
+    isPlaceholder,
+    keyLength,
+    keyPrefix,
+  };
+}
+
+export async function testLiveGeminiConnection(): Promise<{
+  success: boolean;
+  model: string;
+  latencyMs: number;
+  output?: string;
+  error?: string;
+}> {
+  const apiKey = getGeminiApiKey();
+  if (!apiKey) {
+    return {
+      success: false,
+      model: 'none',
+      latencyMs: 0,
+      error: 'GEMINI_API_KEY environment variable is missing or empty in this process',
+    };
+  }
+
+  const ai = new GoogleGenAI({ apiKey });
+  const t0 = Date.now();
+  try {
+    const res = await ai.models.generateContent({
+      model: 'gemini-3.5-flash-lite',
+      contents: 'Return JSON: {"status": "ok", "message": "live Gemini connection verified"}',
+      config: { responseMimeType: 'application/json' },
+    });
+    return {
+      success: true,
+      model: (res as any).modelVersion || 'gemini-3.5-flash-lite',
+      latencyMs: Date.now() - t0,
+      output: res.text?.trim(),
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      model: 'gemini-3.5-flash-lite',
+      latencyMs: Date.now() - t0,
+      error: err.message || String(err),
+    };
+  }
+}
+
 /**
  * AI Dialogue Router (PRD Section 9 & Option C Hybrid)
  *
@@ -106,7 +182,7 @@ export class DialogueRouter {
     options: { correlationId?: string; timeoutMs?: number } = {}
   ): Promise<LlmRoutingDecision> {
     const startTime = Date.now();
-    const timeoutMs = options.timeoutMs || 2500;
+    const timeoutMs = options.timeoutMs || 6000;
     const client = getClient();
 
     if (client) {
@@ -119,6 +195,8 @@ export class DialogueRouter {
         const result = await Promise.race([decisionPromise, timeoutPromise]);
         const latencyMs = Date.now() - startTime;
 
+        const rawLog = `[${new Date().toISOString()}] [TIER 2 GEMINI_LLM SUCCESS] correlationId=${options.correlationId || 'none'} intent=${result.intent} confidence=${result.confidence} latency=${latencyMs}ms model=${result.modelVersion || 'gemini-3.5-flash-lite'}`;
+
         logger.info(
           {
             correlationId: options.correlationId,
@@ -127,9 +205,22 @@ export class DialogueRouter {
             confidence: result.confidence,
             latencyMs,
             source: 'GEMINI_LLM',
+            rawLog,
           },
           'Tier 2 Gemini LLM route decision succeeded'
         );
+
+        recordLlmLog({
+          timestamp: new Date().toISOString(),
+          correlationId: options.correlationId,
+          source: 'GEMINI_LLM',
+          status: 'SUCCESS',
+          utterance,
+          intent: result.intent,
+          confidence: result.confidence,
+          latencyMs,
+          rawLog,
+        });
 
         return {
           ...result,
@@ -137,15 +228,41 @@ export class DialogueRouter {
           latencyMs,
         };
       } catch (err: any) {
+        const errorMsg = err.message || String(err);
+        const rawLog = `[${new Date().toISOString()}] [TIER 2 GEMINI_LLM FAILED] correlationId=${options.correlationId || 'none'} error=${errorMsg} - engaging Tier 3 deterministic fallback`;
+
         logger.warn(
           {
             correlationId: options.correlationId,
-            err: err.message || err,
+            err: errorMsg,
             utterance,
+            rawLog,
           },
           'Tier 2 Gemini LLM routing unavailable/failed; engaging Tier 3 deterministic fallback'
         );
+
+        recordLlmLog({
+          timestamp: new Date().toISOString(),
+          correlationId: options.correlationId,
+          source: 'GEMINI_LLM',
+          status: 'FAILED',
+          utterance,
+          latencyMs: Date.now() - startTime,
+          error: errorMsg,
+          rawLog,
+        });
       }
+    } else {
+      recordLlmLog({
+        timestamp: new Date().toISOString(),
+        correlationId: options.correlationId,
+        source: 'TIER3_DETERMINISTIC_FALLBACK',
+        status: 'SKIPPED',
+        utterance,
+        latencyMs: Date.now() - startTime,
+        error: 'GEMINI_API_KEY is not configured',
+        rawLog: `[${new Date().toISOString()}] [TIER 3 DETERMINISTIC_FALLBACK] correlationId=${options.correlationId || 'none'} reason=GEMINI_API_KEY_NOT_CONFIGURED`,
+      });
     }
 
     // Tier 3: Deterministic Semantic Fallback
@@ -320,7 +437,35 @@ RULES:
       };
     }
 
-    // 5. Symptom Reporting / Specialty Discovery (Cardiology / Orthopedics / General Medicine)
+    // 5. Doctor Availability & Direct Doctor Booking (Prioritized before generic symptom reporting)
+    if (
+      (/\b(what times?|what openings?|when is|available|openings? does|times? does|book|schedule|appointment|see|visit|consult)\b/i.test(textLower)) &&
+      (/\b(dr\.?|doctor|jenkins|chen|rao|patel|rostova|arvind|elena|marcus|maya|anya|david)\b/i.test(textLower))
+    ) {
+      const dayMatch = textLower.match(/\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i);
+      const timePref = textLower.match(/\b(morning|afternoon|evening|earliest|latest)\b/i);
+      const drMatch =
+        textLower.match(/(?:dr\.?|doctor)\s+([a-z\s]+?)(?:\s+at|\s+on|\s+for|\s+this|\s+next|\s+in|\s+morning|\s+afternoon|$)/i) ||
+        textLower.match(/(?:dr\.?|doctor)\s+([a-z]+)/i) ||
+        textLower.match(/\b(jenkins|chen|rao|patel|rostova|arvind|elena|marcus|maya|anya|david)\b/i);
+
+      let extractedDoctor = drMatch ? (drMatch[1] || drMatch[0]).trim() : undefined;
+      if (extractedDoctor && !extractedDoctor.toLowerCase().startsWith('dr')) {
+        extractedDoctor = `Dr. ${extractedDoctor}`;
+      }
+
+      return {
+        intent: 'DOCTOR_BOOKING_CLARIFICATION',
+        entities: {
+          doctorName: extractedDoctor,
+          dayOfWeek: dayMatch ? dayMatch[1] : undefined,
+          timePreference: timePref ? timePref[1] : undefined,
+        },
+        confidence: 'HIGH',
+      };
+    }
+
+    // 6. Symptom Reporting / Specialty Discovery (Cardiology / Orthopedics / General Medicine)
     const isCardioSymptom =
       /\b(heart pain|chest pain|palpitation|palpitations|arrhythmia|hypertension|high blood pressure|cardiac|cardio|cardiolog(?:ist|y)|heart doctor|heart specialist)\b/i.test(
         textLower
@@ -370,29 +515,6 @@ RULES:
       return {
         intent: 'SYMPTOM_REPORT',
         entities: { symptom: 'general illness', specialty: 'General Medicine' },
-        confidence: 'HIGH',
-      };
-    }
-
-    // 6. Doctor Availability & Direct Doctor Booking ("book an appointment with Dr Arvind Rao at morning Monday")
-    if (
-      (/\b(what times?|what openings?|when is|available|openings? does|times? does|book|schedule|appointment|see|visit)\b/i.test(textLower)) &&
-      (/\b(dr\.?|doctor|jenkins|chen|rao|patel|rostova|arvind)\b/i.test(textLower))
-    ) {
-      const dayMatch = textLower.match(/\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i);
-      const timePref = textLower.match(/\b(morning|afternoon|evening|earliest|latest)\b/i);
-      const drMatch =
-        textLower.match(/(?:dr\.?|doctor)\s+([a-z\s]+?)(?:\s+at|\s+on|\s+for|\s+this|\s+next|\s+in|\s+morning|\s+afternoon|$)/i) ||
-        textLower.match(/(?:dr\.?|doctor)\s+([a-z]+)/i) ||
-        textLower.match(/\b(jenkins|chen|rao|patel|rostova|arvind)\b/i);
-
-      return {
-        intent: 'DOCTOR_BOOKING_CLARIFICATION',
-        entities: {
-          doctorName: drMatch ? drMatch[1].trim() : undefined,
-          dayOfWeek: dayMatch ? dayMatch[1] : undefined,
-          timePreference: timePref ? timePref[1] : undefined,
-        },
         confidence: 'HIGH',
       };
     }

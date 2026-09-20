@@ -6,6 +6,8 @@ import { prisma } from '@health/db';
 import { logger } from '@health/observability';
 import crypto from 'node:crypto';
 
+import { getGeminiConfigStatus, testLiveGeminiConnection, recentLlmLogs } from '@health/capabilities';
+
 const fastify = Fastify({ logger: false });
 
 // Maximum allowed capability/turn latency before emitting graceful fallback utterance (allows EHR failure-recovery & reconciliation)
@@ -17,6 +19,27 @@ async function start() {
 
   // Health check
   fastify.get('/health', async () => ({ status: 'ok', service: 'voice-gateway' }));
+
+  // Debug Live Environment & Logs
+  fastify.get('/debug-live-env', async () => {
+    const configStatus = getGeminiConfigStatus();
+    const liveTest = await testLiveGeminiConnection();
+    return {
+      timestamp: new Date().toISOString(),
+      service: 'voice-gateway',
+      geminiConfig: configStatus,
+      liveGeminiTest: liveTest,
+    };
+  });
+
+  fastify.get('/debug-live-logs', async () => {
+    return {
+      timestamp: new Date().toISOString(),
+      service: 'voice-gateway',
+      totalLogs: recentLlmLogs.length,
+      logs: recentLlmLogs,
+    };
+  });
 
   // WebSocket for Real-Time Web Voice HUD
   fastify.register(async function (fastify) {
