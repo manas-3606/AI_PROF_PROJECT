@@ -109,7 +109,7 @@ export function getGeminiConfigStatus() {
     configured,
     keyPrefix: configured ? `${key!.substring(0, 6)}...${key!.substring(key!.length - 4)}` : null,
     keyLength: key ? key.length : 0,
-    modelName: 'gemini-2.5-flash',
+    modelName: 'gemini-3.5-flash-lite',
   };
 }
 
@@ -121,7 +121,7 @@ export async function testLiveGeminiConnection(): Promise<{ success: boolean; la
   }
   try {
     const response = await client.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: 'gemini-3.5-flash-lite',
       contents: 'Respond with exactly the single word "ONLINE" to confirm live connectivity.',
     });
     const text = response.text?.trim() || '';
