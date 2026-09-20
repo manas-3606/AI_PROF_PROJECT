@@ -54,6 +54,15 @@ export function loadSystemPrompt(): string {
   return '# SYSTEM PROMPT: AI PATIENT ACCESS AGENT (PRD SECTION 9 & 20)\nYou are an administrative and scheduling assistant only. NO Diagnosis, NO Prescribing, NO Treatment Recommendations. Clarification-Over-Guessing is strictly enforced.';
 }
 
+const DOCTOR_NAME_STOP_WORDS = new Set([
+  'for', 'in', 'at', 'about', 'who', 'whom', 'to', 'with', 'near', 'on', 'an', 'a', 'the',
+  'appointment', 'visit', 'checkup', 'consultation', 'someone', 'today', 'tomorrow', 'soon',
+  'this', 'next', 'my', 'any', 'first', 'available', 'open', 'good', 'best', 'please',
+  'or', 'and', 'if', 'when', 'there', 'here', 'now', 'which', 'what', 'whose', 'orthopedic',
+  'orthopedics', 'cardiology', 'cardiologist', 'specialist', 'specialty', 'doctor', 'physician',
+  'openings', 'opening', 'slots', 'slot'
+]);
+
 /**
  * AI Patient Access Agent (PRD Section 9, 10, 20)
  *
@@ -370,22 +379,35 @@ export class PatientAccessAgent {
       return this.handleQuestionnaireTurn('yes', context, activePatientId!, capabilityMeta);
     }
 
-    // Handle Doctor Availability & Doctor Booking inquiries (LLM routing or explicit doctor mention)
-    const explicitDrMatch =
-      routeDecision.entities?.doctorName ||
-      textLower.match(/(?:dr\.?|doctor)\s+([a-z\s]+?)(?:\s+at|\s+on|\s+for|\s+this|\s+next|\s+in|\s+morning|\s+afternoon|$)/i)?.[1]?.trim() ||
-      textLower.match(/(?:dr\.?|doctor)\s+([a-z]+)/i)?.[1]?.trim() ||
-      textLower.match(/\b(jenkins|chen|rao|patel|rostova|arvind|elena|marcus|maya|anya|david)\b/i)?.[0]?.trim();
+    // Direct named doctor requests (PRD Rule: Explicit named doctor requests always take precedence over generic symptom discovery)
+    let explicitDoctorQuery: string | undefined = routeDecision.entities?.doctorName;
+    if (!explicitDoctorQuery) {
+      const drMention =
+        textLower.match(/(?:dr\.?|doctor)\s+([a-z\s]+?)(?:\s+at|\s+on|\s+for|\s+this|\s+next|\s+in|\s+morning|\s+afternoon|$)/i) ||
+        textLower.match(/(?:dr\.?|doctor)\s+([a-z]+)/i);
+      if (drMention && !DOCTOR_NAME_STOP_WORDS.has(drMention[1].toLowerCase().trim())) {
+        explicitDoctorQuery = drMention[1].trim();
+      } else {
+        const bookMatch = textLower.match(/(?:book|schedule|appointment\s+with|openings\s+(?:for|does|with)|see)\s+([a-z]+)/i);
+        if (bookMatch && !DOCTOR_NAME_STOP_WORDS.has(bookMatch[1].toLowerCase())) {
+          explicitDoctorQuery = bookMatch[1];
+        } else {
+          const knownDoc = textLower.match(/\b(rao|patel|chen|jenkins|rostova|kim|arvind)\b/i);
+          if (knownDoc) {
+            explicitDoctorQuery = knownDoc[1];
+          }
+        }
+      }
+    }
 
     if (
-      explicitDrMatch &&
-      !['for', 'in', 'at', 'about', 'who', 'whom', 'to', 'with', 'near', 'on', 'an', 'a', 'the', 'appointment', 'visit', 'checkup', 'consultation', 'today', 'tomorrow', 'soon', 'this', 'next', 'first', 'available', 'open', 'doctor', 'physician', 'slot', 'slots'].includes(explicitDrMatch.toLowerCase()) &&
-      (textLower.includes('dr') || textLower.includes('doctor') || /\b(jenkins|chen|rao|patel|rostova|arvind|elena|marcus|maya|anya|david)\b/i.test(textLower)) &&
+      explicitDoctorQuery &&
       !textLower.includes('cancel') &&
-      !textLower.includes('reschedule')
+      !textLower.includes('reschedule') &&
+      context.currentIntent !== 'AWAITING_SLOT_SELECTION'
     ) {
       return this.handleDoctorBookingClarification(
-        explicitDrMatch,
+        explicitDoctorQuery,
         context,
         capabilityMeta,
         routeDecision,
@@ -455,7 +477,7 @@ export class PatientAccessAgent {
     // 3. Pronoun / Reference Resolution & Clarification Handling
     // Only process slot selection if user actually provides a slot selection, affirmative choice, ordinal, or day/time
     const isSlotAffirmative =
-      /\b(yes|yeah|yep|sure|ok|okay|alright|all right|please|confirm|that one|book it|book that|go ahead|proceed|sounds good|that works|first|second|third|1st|2nd|3rd|earliest|latest|morning|afternoon)\b/i.test(
+      /\b(yes|yeah|yep|sure|please|confirm|that one|book it|book that|go ahead|proceed|sounds good|that works|first|second|third|1st|2nd|3rd|earliest|latest|morning|afternoon)\b/i.test(
         textLower
       );
     const hasSlotMention =
@@ -568,23 +590,15 @@ export class PatientAccessAgent {
     }
 
     // 9. Clarification-Over-Guessing: "Book Dr. Rao" or explicit doctor booking without slot selection
-    const stopWords = new Set([
-      'for', 'in', 'at', 'about', 'who', 'whom', 'to', 'with', 'near', 'on', 'an', 'a', 'the',
-      'appointment', 'visit', 'checkup', 'consultation', 'someone', 'today', 'tomorrow', 'soon',
-      'this', 'next', 'my', 'any', 'first', 'available', 'open', 'good', 'best', 'please',
-      'or', 'and', 'if', 'when', 'there', 'here', 'now', 'which', 'what', 'whose', 'orthopedic',
-      'orthopedics', 'cardiology', 'cardiologist', 'specialist', 'specialty', 'doctor', 'physician',
-      'openings', 'opening', 'slots', 'slot'
-    ]);
     let doctorNameQuery: string | undefined;
     const drMention =
       textLower.match(/(?:dr\.?|doctor)\s+([a-z\s]+?)(?:\s+at|\s+on|\s+for|\s+this|\s+next|\s+in|\s+morning|\s+afternoon|$)/i) ||
       textLower.match(/(?:dr\.?|doctor)\s+([a-z]+)/i);
-    if (drMention && !stopWords.has(drMention[1].toLowerCase().trim())) {
+    if (drMention && !DOCTOR_NAME_STOP_WORDS.has(drMention[1].toLowerCase().trim())) {
       doctorNameQuery = drMention[1].trim();
     } else {
       const bookMatch = textLower.match(/(?:book|schedule|appointment\s+with|openings\s+(?:for|does|with)|see)\s+([a-z]+)/i);
-      if (bookMatch && !stopWords.has(bookMatch[1].toLowerCase())) {
+      if (bookMatch && !DOCTOR_NAME_STOP_WORDS.has(bookMatch[1].toLowerCase())) {
         doctorNameQuery = bookMatch[1];
       }
     }
@@ -988,16 +1002,29 @@ export class PatientAccessAgent {
     utteranceText?: string
   ): Promise<AgentTurnResponse> {
     const cleanDocQuery = doctorQuery.replace(/^(?:dr\.?|doctor)\s+/i, '').trim();
-    // Cross-hospital search for explicitly named doctor so they are found regardless of current hospital selection
-    const docSearch = await CapabilityRegistry.execute(
+    let docSearch = await CapabilityRegistry.execute(
       'search_doctors',
       { name: cleanDocQuery },
-      { ...meta, hospitalId: undefined }
+      meta
     );
 
-    const doctor = docSearch.doctors && docSearch.doctors.length > 0 ? docSearch.doctors[0] : null;
+    let doctor = docSearch.doctors && docSearch.doctors.length > 0 ? docSearch.doctors[0] : null;
+
     if (!doctor) {
-      const responseText = `I could not find a doctor named "${doctorQuery}" in our directory. Would you like me to search by specialty?`;
+      // Cross-hospital lookup
+      const altSearch = await CapabilityRegistry.execute(
+        'search_doctors',
+        { name: cleanDocQuery },
+        { ...meta, hospitalId: undefined, tenantId: undefined }
+      );
+      if (altSearch.doctors && altSearch.doctors.length > 0) {
+        doctor = altSearch.doctors[0];
+        docSearch = altSearch;
+      }
+    }
+
+    if (!doctor) {
+      const responseText = `I could not find a doctor matching "${doctorQuery}". Would you like me to search by specialty?`;
       return {
         spokenText: responseText,
         responseText,
@@ -1012,30 +1039,17 @@ export class PatientAccessAgent {
     const docName = doctor.name.startsWith('Dr.') ? doctor.name : `Dr. ${doctor.name}`;
 
     // Check doctor availability and ensure real bookable slots exist within working hours
-    const { avail, availableSlots } = await this.ensureDoctorAvailableSlots(doctor.id, { ...meta, hospitalId: doctor.hospitalId });
+    const { avail, availableSlots } = await this.ensureDoctorAvailableSlots(doctor.id, meta);
 
     if (availableSlots.length === 0) {
-      // Find an alternative doctor in the same specialty to offer with EXPLICIT explanation
       const altSearch = await CapabilityRegistry.execute(
         'search_doctors',
         { specialty: doctor.specialty },
-        { ...meta, hospitalId: undefined }
+        { ...meta, hospitalId: undefined, tenantId: undefined }
       );
-      const altDoc = (altSearch.doctors || []).find((d: any) => d.id !== doctor.id);
-
-      let responseText: string;
-      if (altDoc) {
-        responseText = `${docName} doesn't have any openings this week, but I found Dr. ${altDoc.name.replace(/^(?:dr\.?|doctor)\s+/i, '')} in ${doctor.specialty} at ${altDoc.hospitalName} instead. Would you like me to check their appointments?`;
-      } else {
-        responseText = `${docName} does not have any open appointments available this week. Would you like to check next week or look at another doctor?`;
-      }
-
-      const updatedContext = await ConversationContextManager.updateContext(this.conversationId, {
-        currentIntent: altDoc ? 'AWAITING_DOCTOR_CONFIRMATION' : 'NONE',
-        selectedDoctorId: altDoc ? altDoc.id : doctor.id,
-        selectedHospitalId: altDoc ? altDoc.hospitalId : doctor.hospitalId,
-      });
-
+      const altDoc = altSearch.doctors?.find((d: any) => d.id !== doctor.id);
+      const altNote = altDoc ? ` However, Dr. ${altDoc.name.replace(/^(?:dr\.?|doctor)\s+/i, '')} in ${doctor.specialty} at ${altDoc.hospitalName} has openings.` : '';
+      const responseText = `${docName} does not have any open appointments available this week.${altNote} Would you like me to check appointments with them, or look at next week?`;
       return {
         spokenText: responseText,
         responseText,
@@ -1043,7 +1057,7 @@ export class PatientAccessAgent {
         capabilityCalled: 'check_availability',
         capabilityResult: avail,
         correlationId: meta.correlationId!,
-        context: updatedContext,
+        context,
       };
     }
 
@@ -1319,45 +1333,62 @@ export class PatientAccessAgent {
     // Never let an ordinal or relative keyword (e.g. "morning", "first") silently override an unoffered clock time or day!
     if (dayMatch) {
       const targetDayLower = dayMatch[1].toLowerCase();
-      let dayMatches = ambiguousOptions.filter((opt: any) => {
+      const dayMatches = ambiguousOptions.filter((opt: any) => {
         const optDate = new Date(opt.startTime);
-        return (
-          optDate.toLocaleDateString([], { weekday: 'long' }).toLowerCase() === targetDayLower ||
-          optDate.toLocaleDateString([], { weekday: 'long', timeZone: 'UTC' }).toLowerCase() === targetDayLower
-        );
+        return optDate.toLocaleDateString([], { weekday: 'long' }).toLowerCase() === targetDayLower;
       });
 
-      // If user specified a day that was not in initial slice, check the doctor's full available schedule
-      if (dayMatches.length === 0 && context.selectedDoctorId) {
-        const { availableSlots } = await this.ensureDoctorAvailableSlots(context.selectedDoctorId, meta);
-        dayMatches = availableSlots.filter((opt: any) => {
-          const optDate = new Date(opt.startTime);
-          return (
-            optDate.toLocaleDateString([], { weekday: 'long' }).toLowerCase() === targetDayLower ||
-            optDate.toLocaleDateString([], { weekday: 'long', timeZone: 'UTC' }).toLowerCase() === targetDayLower
-          );
-        });
-      }
-
       if (dayMatches.length === 0) {
-        const doctor = context.selectedDoctorId
-          ? await prisma.doctor.findUnique({ where: { id: context.selectedDoctorId } })
-          : null;
-        const docName = doctor?.name ? (doctor.name.startsWith('Dr.') ? doctor.name : `Dr. ${doctor.name}`) : 'the doctor';
+        // Direct Day Lookup: Check if doctor has available slots on that requested day in the database
+        if (context.selectedDoctorId) {
+          const allDocSlots = await prisma.slot.findMany({
+            where: {
+              doctorId: context.selectedDoctorId,
+              isBooked: false,
+              isBlocked: false,
+              startTime: { gte: new Date() },
+            },
+            orderBy: { startTime: 'asc' },
+          });
+          const realDaySlots = allDocSlots.filter((s: any) => {
+            const d = new Date(s.startTime);
+            return d.toLocaleDateString([], { weekday: 'long' }).toLowerCase() === targetDayLower;
+          });
 
-        const clarifyText = `I don't have any openings for ${docName} on ${dayMatch[1]} — the available openings are on ${offeredDayList} at ${offeredTimesList}. Would one of those work, or should I search another week?`;
-        return {
-          spokenText: clarifyText,
-          responseText: clarifyText,
-          intentDetected: 'SLOT_MISMATCH_CLARIFICATION',
-          clarificationNeeded: true,
-          correlationId: meta.correlationId!,
-          context,
-        };
-      }
+          if (realDaySlots.length > 0) {
+            if (timeMatch) {
+              for (const s of realDaySlots) {
+                const patterns = this.buildSlotMatchPatterns(s.startTime);
+                if (patterns.some((rgx) => rgx.test(textLower))) {
+                  matchedSlot = { id: s.id, slotId: s.id, startTime: s.startTime, doctorId: s.doctorId, hospitalId: s.hospitalId };
+                  break;
+                }
+              }
+            }
+            if (!matchedSlot && !timeMatch) {
+              const s = realDaySlots[0];
+              matchedSlot = { id: s.id, slotId: s.id, startTime: s.startTime, doctorId: s.doctorId, hospitalId: s.hospitalId };
+            }
+          }
+        }
 
-      // If user also specified a time on that day (e.g. "Wednesday 9:30 AM" or "Tuesday at 10am"):
-      if (timeMatch) {
+        if (!matchedSlot) {
+          const doctor = context.selectedDoctorId
+            ? await prisma.doctor.findUnique({ where: { id: context.selectedDoctorId } })
+            : null;
+          const docName = doctor?.name ? (doctor.name.startsWith('Dr.') ? doctor.name : `Dr. ${doctor.name}`) : 'the doctor';
+
+          const clarifyText = `I don't have any openings for ${docName} on ${dayMatch[1]} among the offered options — the available openings are on ${offeredDayList} at ${offeredTimesList}. Would one of those work, or should I search another week?`;
+          return {
+            spokenText: clarifyText,
+            responseText: clarifyText,
+            intentDetected: 'SLOT_MISMATCH_CLARIFICATION',
+            clarificationNeeded: true,
+            correlationId: meta.correlationId!,
+            context,
+          };
+        }
+      } else if (timeMatch) {
         for (const opt of dayMatches) {
           const patterns = this.buildSlotMatchPatterns(opt.startTime);
           if (patterns.some((rgx) => rgx.test(textLower))) {
@@ -1371,12 +1402,8 @@ export class PatientAccessAgent {
             ? await prisma.doctor.findUnique({ where: { id: context.selectedDoctorId } })
             : null;
           const docName = doctor?.name ? (doctor.name.startsWith('Dr.') ? doctor.name : `Dr. ${doctor.name}`) : 'the doctor';
-          const dayTimes = dayMatches.map((s: any) => {
-            const d = new Date(s.startTime);
-            return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-          }).join(', ');
 
-          const clarifyText = `I don't have a ${timeMatch[1]} opening with ${docName} on ${dayMatch[1]} — the available openings on that day are ${dayTimes}. Did you mean one of those, or would another day work?`;
+          const clarifyText = `I don't have a ${timeMatch[1]} opening with ${docName} on ${dayMatch[1]} — the available openings are ${offeredTimesList}. Did you mean one of those, or would another day work?`;
           return {
             spokenText: clarifyText,
             responseText: clarifyText,
@@ -1399,19 +1426,26 @@ export class PatientAccessAgent {
         }
       }
 
-      // Fallback: check full doctor schedule if time was not in the 2-3 offered options
+      // If time was specified but NO offered slot matched: check doctor's real slots in DB
       if (!matchedSlot && context.selectedDoctorId) {
-        const { availableSlots } = await this.ensureDoctorAvailableSlots(context.selectedDoctorId, meta);
-        for (const opt of availableSlots) {
-          const patterns = this.buildSlotMatchPatterns(opt.startTime);
+        const allDocSlots = await prisma.slot.findMany({
+          where: {
+            doctorId: context.selectedDoctorId,
+            isBooked: false,
+            isBlocked: false,
+            startTime: { gte: new Date() },
+          },
+          orderBy: { startTime: 'asc' },
+        });
+        for (const s of allDocSlots) {
+          const patterns = this.buildSlotMatchPatterns(s.startTime);
           if (patterns.some((rgx) => rgx.test(textLower))) {
-            matchedSlot = opt;
+            matchedSlot = { id: s.id, slotId: s.id, startTime: s.startTime, doctorId: s.doctorId, hospitalId: s.hospitalId };
             break;
           }
         }
       }
 
-      // If time was specified but NO offered slot matched: DO NOT SILENTLY BOOK!
       if (!matchedSlot) {
         const doctor = context.selectedDoctorId
           ? await prisma.doctor.findUnique({ where: { id: context.selectedDoctorId } })
@@ -1457,14 +1491,14 @@ export class PatientAccessAgent {
           textLower
         )
       ) {
-        // AMBIGUOUS AFFIRMATIVE: When multiple slots were offered, "yeah" requires clarification on which time!
         if (ambiguousOptions.length > 1) {
-          const times = ambiguousOptions.map((opt: any) => {
-            const d = new Date(opt.startTime);
-            return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-          });
-          const timeChoiceStr = times.slice(0, 2).join(' or ');
-          const clarifyText = `Which time would you prefer — ${timeChoiceStr}?`;
+          const clarifyTimes = ambiguousOptions
+            .map((opt: any) => {
+              const d = new Date(opt.startTime);
+              return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+            })
+            .join(' or ');
+          const clarifyText = `Which time would you prefer — ${clarifyTimes}?`;
           return {
             spokenText: clarifyText,
             responseText: clarifyText,
@@ -1473,9 +1507,8 @@ export class PatientAccessAgent {
             correlationId: meta.correlationId!,
             context,
           };
-        } else {
-          matchedSlot = ambiguousOptions[0];
         }
+        matchedSlot = ambiguousOptions[0];
       } else {
         // Patient did not provide an affirmative choice or specific time/ordinal
         const doctor = context.selectedDoctorId
@@ -1496,16 +1529,16 @@ export class PatientAccessAgent {
     }
 
     const chosenSlotId = matchedSlot ? (matchedSlot.id || matchedSlot.slotId) : undefined;
-    if (chosenSlotId && !offeredSlotIds.includes(chosenSlotId)) {
-      offeredSlotIds.push(chosenSlotId);
-    }
 
     try {
       // Hard structural guardrail check:
-      if (!chosenSlotId || !offeredSlotIds.includes(chosenSlotId)) {
+      if (!chosenSlotId) {
         throw new Error(
-          `Structural guardrail violation: slot ${chosenSlotId} was not in offeredSlotIds [${offeredSlotIds.join(',')}]`
+          `Structural guardrail violation: slot was not selected`
         );
+      }
+      if (!offeredSlotIds.includes(chosenSlotId)) {
+        offeredSlotIds.push(chosenSlotId);
       }
 
       let resolvedHospitalId = context.selectedHospitalId;

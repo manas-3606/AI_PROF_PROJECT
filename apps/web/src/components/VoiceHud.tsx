@@ -255,9 +255,10 @@ export const VoiceHud: React.FC<VoiceHudProps> = ({ onAppointmentBooked }) => {
   // Send completed patient utterance to AI voice gateway
   const handlePatientUtterance = useCallback((textToSend: string) => {
     const cleaned = textToSend.trim();
-    if (!cleaned || cleaned.length < 2) return;
+    // Guard against empty, single-character, or pure punctuation/noise
+    if (!cleaned || cleaned.length < 2 || /^[^a-zA-Z0-9]+$/.test(cleaned)) return;
 
-    // Synchronously transition state to thinking and clear buffers BEFORE any abort or speech cancel
+    // Synchronously update ref and clear buffers FIRST before aborting recognition
     voiceStateRef.current = 'thinking';
     accumulatedTranscriptRef.current = '';
     speechStartTimeRef.current = null;
@@ -301,7 +302,6 @@ export const VoiceHud: React.FC<VoiceHudProps> = ({ onAppointmentBooked }) => {
             text: 'Voice gateway is connecting. Please ensure the voice-gateway service is running and reachable.',
           },
         ]);
-        voiceStateRef.current = 'idle';
         setVoiceState('idle');
       }, 1000);
     }
@@ -318,7 +318,7 @@ export const VoiceHud: React.FC<VoiceHudProps> = ({ onAppointmentBooked }) => {
     recognition.lang = 'en-US';
 
     recognition.onresult = (event: any) => {
-      // Do not process microphone input while the agent is speaking or thinking (echo prevention & phantom guard)
+      // Do not process microphone input while the agent is speaking or thinking (echo / race prevention)
       if (voiceStateRef.current === 'speaking' || voiceStateRef.current === 'thinking') {
         return;
       }
@@ -326,6 +326,9 @@ export const VoiceHud: React.FC<VoiceHudProps> = ({ onAppointmentBooked }) => {
       let currentFinal = '';
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const item = event.results[i];
+        if (item[0].confidence !== undefined && item[0].confidence > 0 && item[0].confidence < 0.25) {
+          continue;
+        }
         if (item.isFinal) {
           currentFinal += item[0].transcript + ' ';
         } else {
@@ -334,7 +337,8 @@ export const VoiceHud: React.FC<VoiceHudProps> = ({ onAppointmentBooked }) => {
       }
 
       const text = currentFinal.trim();
-      if (!text || text.length < 2) return;
+      // Minimum length guard: ignore single letters or whitespace
+      if (!text || text.length < 2 || /^[^a-zA-Z0-9]+$/.test(text)) return;
 
       if (!speechStartTimeRef.current) {
         speechStartTimeRef.current = Date.now();
@@ -348,18 +352,18 @@ export const VoiceHud: React.FC<VoiceHudProps> = ({ onAppointmentBooked }) => {
         clearTimeout(silenceTimerRef.current);
       }
       silenceTimerRef.current = setTimeout(() => {
-        if (voiceStateRef.current === 'listening' && accumulatedTranscriptRef.current.trim().length >= 2) {
+        if (voiceStateRef.current === 'listening' && accumulatedTranscriptRef.current.trim()) {
+          const textToSubmit = accumulatedTranscriptRef.current.trim();
+          accumulatedTranscriptRef.current = '';
           const durationMs = speechStartTimeRef.current ? Date.now() - speechStartTimeRef.current : 0;
           sendLifecycleEvent('VAD_SPEECH_END', {
-            transcript: accumulatedTranscriptRef.current,
+            transcript: textToSubmit,
             durationMs,
             silenceThresholdMs: 1400,
           });
           speechStartTimeRef.current = null;
-          const transcriptToSubmit = accumulatedTranscriptRef.current;
-          accumulatedTranscriptRef.current = '';
-          console.log('🎙️ Silence detected (1400ms threshold), auto-submitting:', transcriptToSubmit);
-          handlePatientUtterance(transcriptToSubmit);
+          console.log('🎙️ Silence detected (1400ms threshold), auto-submitting:', textToSubmit);
+          handlePatientUtterance(textToSubmit);
         }
       }, 1400);
     };
@@ -376,18 +380,15 @@ export const VoiceHud: React.FC<VoiceHudProps> = ({ onAppointmentBooked }) => {
       isStartingRef.current = false;
       if (e.error === 'not-allowed') {
         setMicError('Microphone permission was denied. Please allow microphone access in browser settings.');
-        voiceStateRef.current = 'idle';
         setVoiceState('idle');
         stopAudioCapture();
       } else if (e.error === 'network') {
         setMicError('Speech recognition service offline (network issue). You can type directly in the box below or click to retry.');
-        voiceStateRef.current = 'idle';
         setVoiceState('idle');
         stopAudioCapture();
       } else if (e.error !== 'no-speech' && e.error !== 'aborted') {
         console.warn('Speech recognition error:', e.error);
         setMicError(`Microphone issue: ${e.error}`);
-        voiceStateRef.current = 'idle';
         setVoiceState('idle');
         stopAudioCapture();
       }
@@ -405,8 +406,8 @@ export const VoiceHud: React.FC<VoiceHudProps> = ({ onAppointmentBooked }) => {
       }
       if (voiceStateRef.current === 'listening') {
         const textToSubmit = accumulatedTranscriptRef.current.trim();
-        if (textToSubmit.length >= 2) {
-          accumulatedTranscriptRef.current = '';
+        accumulatedTranscriptRef.current = '';
+        if (textToSubmit && textToSubmit.length >= 2 && !/^[^a-zA-Z0-9]+$/.test(textToSubmit)) {
           handlePatientUtterance(textToSubmit);
         } else if (isContinuousSessionRef.current) {
           // Restart cleanly if user remains in continuous hands-free listening
@@ -431,11 +432,10 @@ export const VoiceHud: React.FC<VoiceHudProps> = ({ onAppointmentBooked }) => {
   const speakText = useCallback((text: string) => {
     if (!('speechSynthesis' in window)) return;
 
-    sendLifecycleEvent('TTS_PLAYBACK_REQUESTED', { textLength: text.length });
-
-    // Synchronously set speaking state immediately before any speech scheduling to block recognition loopback
+    // Immediately set synchronous voiceStateRef so recognition cannot race or listen to itself
     voiceStateRef.current = 'speaking';
     setVoiceState('speaking');
+    sendLifecycleEvent('TTS_PLAYBACK_REQUESTED', { textLength: text.length });
 
     // Echo prevention: mute and abort microphone before computer speaks
     if (recognitionRef.current && isRecognizingRef.current) {
@@ -469,18 +469,15 @@ export const VoiceHud: React.FC<VoiceHudProps> = ({ onAppointmentBooked }) => {
         console.warn('TTS safety watchdog fired: releasing speaking lock');
         activeUtteranceRef.current = null;
         if (isContinuousSessionRef.current) {
-          voiceStateRef.current = 'listening';
           setVoiceState('listening');
           startListeningRef.current();
         } else {
-          voiceStateRef.current = 'idle';
           setVoiceState('idle');
         }
       }
     }, estimatedDurationMs);
 
     utterance.onstart = () => {
-      voiceStateRef.current = 'speaking';
       setVoiceState('speaking');
       sendLifecycleEvent('TTS_PLAYBACK_START');
     };
@@ -490,7 +487,6 @@ export const VoiceHud: React.FC<VoiceHudProps> = ({ onAppointmentBooked }) => {
       activeUtteranceRef.current = null;
       sendLifecycleEvent('TTS_PLAYBACK_END');
       if (isContinuousSessionRef.current) {
-        voiceStateRef.current = 'listening';
         setVoiceState('listening');
         setTimeout(() => {
           if (isContinuousSessionRef.current) {
@@ -498,7 +494,6 @@ export const VoiceHud: React.FC<VoiceHudProps> = ({ onAppointmentBooked }) => {
           }
         }, 350);
       } else {
-        voiceStateRef.current = 'idle';
         setVoiceState('idle');
       }
     };
@@ -509,7 +504,6 @@ export const VoiceHud: React.FC<VoiceHudProps> = ({ onAppointmentBooked }) => {
       activeUtteranceRef.current = null;
       sendLifecycleEvent('TTS_PLAYBACK_ERROR', { error: String(err) });
       if (isContinuousSessionRef.current) {
-        voiceStateRef.current = 'listening';
         setVoiceState('listening');
         setTimeout(() => {
           if (isContinuousSessionRef.current) {
@@ -517,7 +511,6 @@ export const VoiceHud: React.FC<VoiceHudProps> = ({ onAppointmentBooked }) => {
           }
         }, 350);
       } else {
-        voiceStateRef.current = 'idle';
         setVoiceState('idle');
       }
     };
@@ -737,7 +730,6 @@ export const VoiceHud: React.FC<VoiceHudProps> = ({ onAppointmentBooked }) => {
 
       if (recognitionRef.current) {
         if (isRecognizingRef.current || isStartingRef.current) {
-          voiceStateRef.current = 'listening';
           setVoiceState('listening');
           return;
         }
@@ -745,29 +737,24 @@ export const VoiceHud: React.FC<VoiceHudProps> = ({ onAppointmentBooked }) => {
         try {
           isStartingRef.current = true;
           recognitionRef.current.start();
-          voiceStateRef.current = 'listening';
           setVoiceState('listening');
         } catch (e: any) {
           isStartingRef.current = false;
           if (e.name === 'InvalidStateError') {
             isRecognizingRef.current = true;
-            voiceStateRef.current = 'listening';
             setVoiceState('listening');
           } else {
             console.warn('SpeechRecognition start notice:', e);
-            voiceStateRef.current = 'listening';
             setVoiceState('listening');
           }
         }
       } else {
-        voiceStateRef.current = 'listening';
         setVoiceState('listening');
       }
     } catch (err: any) {
       isStartingRef.current = false;
       console.error('Failed to start voice capture:', err);
       setMicError('Could not start microphone. Please check browser permissions.');
-      voiceStateRef.current = 'idle';
       setVoiceState('idle');
       isContinuousSessionRef.current = false;
       setIsContinuousActive(false);
@@ -785,13 +772,6 @@ export const VoiceHud: React.FC<VoiceHudProps> = ({ onAppointmentBooked }) => {
     isStoppingRef.current = true;
     isContinuousSessionRef.current = false;
     setIsContinuousActive(false);
-    voiceStateRef.current = 'idle';
-    accumulatedTranscriptRef.current = '';
-    speechStartTimeRef.current = null;
-    if (silenceTimerRef.current) {
-      clearTimeout(silenceTimerRef.current);
-      silenceTimerRef.current = null;
-    }
     if (recognitionRef.current && isRecognizingRef.current) {
       try {
         recognitionRef.current.abort();
@@ -799,6 +779,10 @@ export const VoiceHud: React.FC<VoiceHudProps> = ({ onAppointmentBooked }) => {
       isRecognizingRef.current = false;
     }
     stopAudioCapture();
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
     setVoiceState('idle');
   }, []);
 

@@ -89,77 +89,51 @@ function getClient(): GoogleGenAI | null {
   return geminiClient;
 }
 
-export interface LlmLogEntry {
+export interface RecentLlmLog {
   timestamp: string;
   correlationId?: string;
-  source: 'GEMINI_LLM' | 'TIER3_DETERMINISTIC_FALLBACK';
-  status: 'SUCCESS' | 'FAILED' | 'SKIPPED';
   utterance: string;
-  intent?: string;
-  confidence?: string;
+  source: 'GEMINI_LLM' | 'TIER3_DETERMINISTIC_FALLBACK';
+  intent: string;
+  confidence: string;
   latencyMs: number;
   rawLog: string;
-  error?: string;
 }
 
-export const recentLlmLogs: LlmLogEntry[] = [];
-export function recordLlmLog(entry: LlmLogEntry) {
-  recentLlmLogs.unshift(entry);
-  if (recentLlmLogs.length > 50) {
-    recentLlmLogs.length = 50;
-  }
-}
+export const recentLlmLogs: RecentLlmLog[] = [];
 
 export function getGeminiConfigStatus() {
   const key = getGeminiApiKey();
-  const isConfigured = !!key;
-  const isPlaceholder = !key || key === 'your-gemini-api-key-here' || key.includes('placeholder');
-  const keyLength = key ? key.length : 0;
-  const keyPrefix = key ? `${key.slice(0, 6)}...${key.slice(-4)}` : 'none';
+  const configured = Boolean(key && key.length > 10 && key !== 'your-gemini-api-key-here');
   return {
-    isConfigured,
-    isPlaceholder,
-    keyLength,
-    keyPrefix,
+    configured,
+    keyPrefix: configured ? `${key!.substring(0, 6)}...${key!.substring(key!.length - 4)}` : null,
+    keyLength: key ? key.length : 0,
+    modelName: 'gemini-2.5-flash',
   };
 }
 
-export async function testLiveGeminiConnection(): Promise<{
-  success: boolean;
-  model: string;
-  latencyMs: number;
-  output?: string;
-  error?: string;
-}> {
-  const apiKey = getGeminiApiKey();
-  if (!apiKey) {
-    return {
-      success: false,
-      model: 'none',
-      latencyMs: 0,
-      error: 'GEMINI_API_KEY environment variable is missing or empty in this process',
-    };
+export async function testLiveGeminiConnection(): Promise<{ success: boolean; latencyMs: number; error?: string; sampleResponse?: string }> {
+  const start = Date.now();
+  const client = getClient();
+  if (!client) {
+    return { success: false, latencyMs: 0, error: 'GEMINI_API_KEY is missing or not configured' };
   }
-
-  const ai = new GoogleGenAI({ apiKey });
-  const t0 = Date.now();
   try {
-    const res = await ai.models.generateContent({
-      model: 'gemini-3.5-flash-lite',
-      contents: 'Return JSON: {"status": "ok", "message": "live Gemini connection verified"}',
-      config: { responseMimeType: 'application/json' },
+    const response = await client.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: 'Respond with exactly the single word "ONLINE" to confirm live connectivity.',
     });
+    const text = response.text?.trim() || '';
     return {
       success: true,
-      model: (res as any).modelVersion || 'gemini-3.5-flash-lite',
-      latencyMs: Date.now() - t0,
-      output: res.text?.trim(),
+      latencyMs: Date.now() - start,
+      sampleResponse: text,
     };
   } catch (err: any) {
     return {
       success: false,
-      model: 'gemini-3.5-flash-lite',
-      latencyMs: Date.now() - t0,
+      latencyMs: Date.now() - start,
       error: err.message || String(err),
     };
   }
@@ -182,7 +156,7 @@ export class DialogueRouter {
     options: { correlationId?: string; timeoutMs?: number } = {}
   ): Promise<LlmRoutingDecision> {
     const startTime = Date.now();
-    const timeoutMs = options.timeoutMs || 6000;
+    const timeoutMs = options.timeoutMs || 2500;
     const client = getClient();
 
     if (client) {
@@ -195,8 +169,6 @@ export class DialogueRouter {
         const result = await Promise.race([decisionPromise, timeoutPromise]);
         const latencyMs = Date.now() - startTime;
 
-        const rawLog = `[${new Date().toISOString()}] [TIER 2 GEMINI_LLM SUCCESS] correlationId=${options.correlationId || 'none'} intent=${result.intent} confidence=${result.confidence} latency=${latencyMs}ms model=${result.modelVersion || 'gemini-3.5-flash-lite'}`;
-
         logger.info(
           {
             correlationId: options.correlationId,
@@ -205,22 +177,22 @@ export class DialogueRouter {
             confidence: result.confidence,
             latencyMs,
             source: 'GEMINI_LLM',
-            rawLog,
           },
           'Tier 2 Gemini LLM route decision succeeded'
         );
 
-        recordLlmLog({
+        const rawLog = `[${new Date().toISOString()}] [GEMINI_LLM] Turn routed via model in ${latencyMs}ms. Intent: ${result.intent}, Confidence: ${result.confidence}`;
+        recentLlmLogs.unshift({
           timestamp: new Date().toISOString(),
           correlationId: options.correlationId,
-          source: 'GEMINI_LLM',
-          status: 'SUCCESS',
           utterance,
+          source: 'GEMINI_LLM',
           intent: result.intent,
           confidence: result.confidence,
           latencyMs,
           rawLog,
         });
+        if (recentLlmLogs.length > 50) recentLlmLogs.pop();
 
         return {
           ...result,
@@ -228,46 +200,49 @@ export class DialogueRouter {
           latencyMs,
         };
       } catch (err: any) {
-        const errorMsg = err.message || String(err);
-        const rawLog = `[${new Date().toISOString()}] [TIER 2 GEMINI_LLM FAILED] correlationId=${options.correlationId || 'none'} error=${errorMsg} - engaging Tier 3 deterministic fallback`;
-
         logger.warn(
           {
             correlationId: options.correlationId,
-            err: errorMsg,
+            err: err.message || err,
             utterance,
-            rawLog,
           },
           'Tier 2 Gemini LLM routing unavailable/failed; engaging Tier 3 deterministic fallback'
         );
 
-        recordLlmLog({
+        const rawLog = `[${new Date().toISOString()}] [TIER3_DETERMINISTIC_FALLBACK] Gemini failed (${err.message || err}). Fallback to deterministic classifier.`;
+        recentLlmLogs.unshift({
           timestamp: new Date().toISOString(),
           correlationId: options.correlationId,
-          source: 'GEMINI_LLM',
-          status: 'FAILED',
           utterance,
+          source: 'TIER3_DETERMINISTIC_FALLBACK',
+          intent: 'FALLBACK_PENDING',
+          confidence: 'LOW',
           latencyMs: Date.now() - startTime,
-          error: errorMsg,
           rawLog,
         });
+        if (recentLlmLogs.length > 50) recentLlmLogs.pop();
       }
-    } else {
-      recordLlmLog({
-        timestamp: new Date().toISOString(),
-        correlationId: options.correlationId,
-        source: 'TIER3_DETERMINISTIC_FALLBACK',
-        status: 'SKIPPED',
-        utterance,
-        latencyMs: Date.now() - startTime,
-        error: 'GEMINI_API_KEY is not configured',
-        rawLog: `[${new Date().toISOString()}] [TIER 3 DETERMINISTIC_FALLBACK] correlationId=${options.correlationId || 'none'} reason=GEMINI_API_KEY_NOT_CONFIGURED`,
-      });
     }
 
     // Tier 3: Deterministic Semantic Fallback
     const fallbackDecision = this.deterministicFallback(utterance, context);
     const latencyMs = Date.now() - startTime;
+
+    const rawLog = `[${new Date().toISOString()}] [TIER3_DETERMINISTIC_FALLBACK] Turn routed via Tier 3 rule in ${latencyMs}ms. Intent: ${fallbackDecision.intent}, Confidence: ${fallbackDecision.confidence}`;
+    if (!recentLlmLogs.some((l) => l.correlationId === options.correlationId)) {
+      recentLlmLogs.unshift({
+        timestamp: new Date().toISOString(),
+        correlationId: options.correlationId,
+        utterance,
+        source: 'TIER3_DETERMINISTIC_FALLBACK',
+        intent: fallbackDecision.intent,
+        confidence: fallbackDecision.confidence,
+        latencyMs,
+        rawLog,
+      });
+      if (recentLlmLogs.length > 50) recentLlmLogs.pop();
+    }
+
     return {
       ...fallbackDecision,
       source: 'TIER3_DETERMINISTIC_FALLBACK',
@@ -437,27 +412,22 @@ RULES:
       };
     }
 
-    // 5. Doctor Availability & Direct Doctor Booking (Prioritized before generic symptom reporting)
+    // 5. Doctor Availability & Direct Doctor Booking ("book an appointment with Dr Arvind Rao at morning Monday")
     if (
-      (/\b(what times?|what openings?|when is|available|openings? does|times? does|book|schedule|appointment|see|visit|consult)\b/i.test(textLower)) &&
-      (/\b(dr\.?|doctor|jenkins|chen|rao|patel|rostova|arvind|elena|marcus|maya|anya|david)\b/i.test(textLower))
+      (/\b(what times?|what openings?|when is|available|openings? does|times? does|book|schedule|appointment|see|visit)\b/i.test(textLower)) &&
+      (/\b(dr\.?|doctor|jenkins|chen|rao|patel|rostova|arvind|kim)\b/i.test(textLower))
     ) {
       const dayMatch = textLower.match(/\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i);
       const timePref = textLower.match(/\b(morning|afternoon|evening|earliest|latest)\b/i);
       const drMatch =
         textLower.match(/(?:dr\.?|doctor)\s+([a-z\s]+?)(?:\s+at|\s+on|\s+for|\s+this|\s+next|\s+in|\s+morning|\s+afternoon|$)/i) ||
         textLower.match(/(?:dr\.?|doctor)\s+([a-z]+)/i) ||
-        textLower.match(/\b(jenkins|chen|rao|patel|rostova|arvind|elena|marcus|maya|anya|david)\b/i);
-
-      let extractedDoctor = drMatch ? (drMatch[1] || drMatch[0]).trim() : undefined;
-      if (extractedDoctor && !extractedDoctor.toLowerCase().startsWith('dr')) {
-        extractedDoctor = `Dr. ${extractedDoctor}`;
-      }
+        textLower.match(/\b(jenkins|chen|rao|patel|rostova|arvind|kim)\b/i);
 
       return {
         intent: 'DOCTOR_BOOKING_CLARIFICATION',
         entities: {
-          doctorName: extractedDoctor,
+          doctorName: drMatch ? drMatch[1].trim() : undefined,
           dayOfWeek: dayMatch ? dayMatch[1] : undefined,
           timePreference: timePref ? timePref[1] : undefined,
         },
@@ -549,7 +519,7 @@ RULES:
     // 9. Slot selection from offered options
     if (
       context.currentIntent === 'AWAITING_SLOT_SELECTION' &&
-      /\b(first|second|third|10am|11am|9am|2pm|3pm|8:30|9:30|10:30|morning|afternoon|next|earliest|that one|book it|book that|book the|yes|yeah|yep|sure|ok|okay|sounds good|please|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(textLower)
+      /\b(first|second|third|10am|11am|9am|2pm|3pm|morning|afternoon|next|earliest|that one|book it|yes|yeah|yep|sure|please)\b/i.test(textLower)
     ) {
       return {
         intent: 'SLOT_SELECTION',
