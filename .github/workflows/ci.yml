@@ -50,6 +50,9 @@ jobs:
       - name: Setup test database
         run: pnpm db:push
 
+      - name: Seed test database
+        run: pnpm db:seed
+
       - name: Build packages & services
         run: pnpm build
 
