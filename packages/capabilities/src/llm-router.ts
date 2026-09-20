@@ -549,7 +549,7 @@ RULES:
     // 9. Slot selection from offered options
     if (
       context.currentIntent === 'AWAITING_SLOT_SELECTION' &&
-      /\b(first|second|third|10am|11am|9am|2pm|3pm|morning|afternoon|next|earliest|that one|book it|yes|yeah|yep|sure|please)\b/i.test(textLower)
+      /\b(first|second|third|10am|11am|9am|2pm|3pm|8:30|9:30|10:30|morning|afternoon|next|earliest|that one|book it|book that|book the|yes|yeah|yep|sure|ok|okay|sounds good|please|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(textLower)
     ) {
       return {
         intent: 'SLOT_SELECTION',

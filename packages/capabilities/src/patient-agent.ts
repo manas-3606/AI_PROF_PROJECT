@@ -455,7 +455,7 @@ export class PatientAccessAgent {
     // 3. Pronoun / Reference Resolution & Clarification Handling
     // Only process slot selection if user actually provides a slot selection, affirmative choice, ordinal, or day/time
     const isSlotAffirmative =
-      /\b(yes|yeah|yep|sure|please|confirm|that one|book it|book that|go ahead|proceed|sounds good|that works|first|second|third|1st|2nd|3rd|earliest|latest|morning|afternoon)\b/i.test(
+      /\b(yes|yeah|yep|sure|ok|okay|alright|all right|please|confirm|that one|book it|book that|go ahead|proceed|sounds good|that works|first|second|third|1st|2nd|3rd|earliest|latest|morning|afternoon)\b/i.test(
         textLower
       );
     const hasSlotMention =
